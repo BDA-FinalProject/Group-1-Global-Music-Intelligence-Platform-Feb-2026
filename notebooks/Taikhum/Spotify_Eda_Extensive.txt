@@ -1,0 +1,407 @@
+              Songs
+                |
+                |
+                |
+        charts_songs_daily
+              FACT
+
+
+              Artists
+                |
+                |
+        charts_artists_daily
+              FACT
+
+
+              Albums
+                |
+                |
+        charts_albums_weekly
+              FACT
+
+
+
+Datasets Summary : 
+-> No duplicate rows in any dataset
+-> Dataset-wise null values : 
+a) albums_df = album_name : 1, artist_names : 1, label = 2, release_date : 755
+b) artwork_df = last_seen_date : 22217
+c) charts_albums_weekly_df = album_name : 1542, artist_names : 1542, label : 1557, release_date = 76768
+d) charts_songs_daily_df = artist_names : 44711, track_name : 44711, label : 42993, release_date : 636254
+e) links_df = youtube_music_id : 12184, youtube_video_id : 21778, youtube_browse_id = 101205, youtube_channel_id : 101420 
+f) songs_df : track_name : 1, artist_names : 1, label : 3, release_date : 2608
+
+
+
+1] Albums : 
+album_name       1
+artist_names     1
+label            2
+release_date   755
+
+Cleaning decision:
+- keep albums
+- fill unknown labels
+- handle dates separately
+
+2] Artwork : metadata so doesn't matter and we will drop this
+
+3] Album Charts : 
+
+4] Artist Charts : 
+
+5] Song Charts : 
+track_name        1
+artist_names      1
+label             3
+release_date      2608
+
+Since : date, country, rank, streams, uri have no duplicate values so analysis wont be hindered
+
+-> Dataset has top 200 songs daily
+-> Fact Table Grain Validation : 192 duplicate records so will remove them during cleaning
+
+
+-> Start Date : 2017-01-01
+   End Date   : 2026-05-20 
+   ≈ 9.5 years of daily Spotify history
+
+-> Overview
+Total Songs	        207164
+Total Artists	        63775
+Total Albums	        24675
+Total Labels	        27580
+Countries Covered	73
+Total Chart Records	42757018
+
+
+-> there are 241874 songs in songs chart... 34,710 more as songs data is just metadata of songs or a catalogue of spotify. All songs in songs df are present in songs_charts df so there are more 34k due to the following reasons : 
+removed Spotify tracks,
+unavailable tracks,
+metadata extraction missed them,
+changed Spotify URI,
+historical records
+
+
+
+
+Bronze Layer Findings:
+
+Records:
+42,757,018
+
+Unique charted songs:
+241,874
+
+Metadata available:
+207,164 songs approximately
+
+Missing song metadata:
+34,710 songs (~14%)
+
+Countries:
+73
+
+Time coverage:
+2017-01-01 to 2026-05-20
+
+Decision:
+Preserve complete chart history for analytics  because the fact table itself contains required descriptive attributes:
+track_name, artist_names, label, release_date.
+
+
+
+
+
+bronze/
+ |
+ |-- songs
+ |-- artists
+ |-- albums
+ |-- song_charts
+ |-- artist_charts
+ |-- album_charts
+ |-- links
+ |-- artwork
+
+silver/
+ |
+ |-- song_charts_cleaned 
+ |-- songs_cleaned
+ |-- artists_cleaned
+ |-- album_charts_cleaned (not required)
+
+
+gold/ (only analytics tables)
+
+song_performance
+artist_performance
+country_trends
+streaming_growth
+ranking_analysis
+
+
+
+BRONZE LAYER DATASET SUMMARY
+Dataset: Spotify Daily Song Charts
+Source Table: charts_songs_daily
+
+
+Metric                  Actual Value        Source                          Meaning
+------------------------------------------------------------------------------------------------------------
+
+Total Chart Records      42,757,018         charts_songs_daily              Daily song performance events
+
+Unique Songs             241,874            charts_songs_daily.uri          Songs that appeared in Spotify charts
+
+Unique Artists           93,457             charts_songs_daily.artist_uris  Artists that appeared in song charts
+
+Unique Labels            27,947             charts_songs_daily.label        Music labels that appeared in charts
+
+Countries Covered        73                 charts_songs_daily.country      Spotify markets/countries covered
+
+
+Additional Dataset Information
+------------------------------------------------------------------------------------------------------------
+
+Time Coverage            2017-01-01 to 2026-05-20
+
+Total Columns            18
+
+Data Granularity         One record represents one song's performance
+                         in one country on one particular date
+
+
+Business Key
+------------------------------------------------------------------------------------------------------------
+
+Unique Event Identifier:
+
+date + country + uri
+
+
+Example:
+
+2026-05-20 + US + spotify_track_uri
+=
+One song chart performance record
+
+
+Bronze Layer Findings
+------------------------------------------------------------------------------------------------------------
+
+1. No exact duplicate records found.
+
+2. 192 duplicate business events identified using:
+   date + country + uri
+
+3. Minor missing values detected in:
+   - track_name
+   - artist_names
+   - label
+   - release_date
+
+4. Entity relationship validation performed for:
+   - Songs
+   - Artists
+   - Labels
+
+5. Complete chart history will be preserved.
+   Data quality issues will be handled in Silver Layer.
+
+------------------------------------------------------------------------------------------------------------
+
+-> Oldest song present in chart : 1840-06-14 
+
+
+--------------------------------------------------------------------------------------------------------------
+Global Music Intelligence Platform
+
+Main goals:
+1. Cross-Country Music Consumption Analytics
+
+Questions:
+Which countries stream the most music?
+Which songs dominate different markets?
+How does popularity change over time?
+
+Columns needed : 
+date              
+country      
+rank              
+streams        
+track_name        
+artist_name
+
+2. Artist Performance Analytics
+
+Questions:
+Who are the fastest-growing artists?
+Which artists dominate globally?
+Which artists have the highest reach?  
+
+Columns needed : 
+artist_name
+artist_uri
+streams
+rank
+country
+days_on_chart
+peak_rank
+date
+
+
+3. Label Performance Analytics
+
+Questions:
+Which labels control market share?
+Which labels produce top artists?
+Which labels generate highest streams?
+
+Columns Needed : 
+label
+streams
+artists
+tracks
+country
+rank
+
+
+So insights like below wont be trustworthy : 
+- New vs Evergreen Songs
+- Viral Discovery : Fastest Rising New Releases
+
+-------------------------------------------------------------------------------
+
+🥈 SILVER LAYER
+================================================
+
+
+1) silver_song_charts
+------------------------------------------------
+
+Purpose:
+Clean song chart fact table
+
+
+Source Columns:
+✓ date
+✓ country
+✓ uri
+✓ track_name
+✓ artist_names
+✓ artist_uris
+✓ label
+✓ streams
+✓ rank
+
+
+Cleaning:
+✓ duplicate removal
+✓ null handling
+✓ invalid rank validation
+✓ invalid stream validation
+✓ text standardization
+✓ release date correction
+
+
+Added Features:
+✓ standardized_label
+
+Time Intelligence:
+✓ year
+✓ month
+✓ quarter
+✓ week
+
+Song Lifecycle:
+✓ valid_release_date
+✓ song_age_days
+✓ song_age_category
+
+Chart Intelligence:
+✓ rank_movement
+✓ movement_category
+✓ hit_category
+✓ stream_tier
+✓ chart_strength_score
+
+
+
+2) silver_artist_mapping
+------------------------------------------------
+
+Purpose:
+Artist normalization bridge table
+
+
+Before:
+
+Song A
+Taylor Swift|Post Malone
+
+
+After:
+
+Song A → Taylor Swift
+Song A → Post Malone
+
+
+Columns:
+
+✓ uri
+✓ artist_uri
+✓ artist_name
+✓ standardized_artist_name
+
+
+Cleaning:
+✓ artist splitting
+✓ duplicate removal
+✓ text standardization
+
+
+
+
+🥈 SILVER LAYER FINAL SUMMARY
+================================================
+
+silver_song_charts
+
+Columns : 31
+Records : 42,756,826
+
+
+silver_artist_mapping
+
+Columns : 4
+Records : 37,993,030
+
+
+-> During Silver validation, 78 Spotify track URIs (≈0.03% of unique songs) were found to have multiple track names due to source metadata inconsistencies (capitalization or naming changes). Since the URI remains stable and uniquely identifies the song, no transformation was applied.
+
+If the examiner asks
+Why didn't you standardize track names?
+
+You can confidently answer:
+Spotify URI is the canonical identifier for a track. Track names are descriptive metadata and may legitimately change due to capitalization, punctuation, localization, or metadata updates. Therefore, the ETL preserves the original source values while using the URI as the business key for all aggregations.
+
+-> Metadata Enrichment Feasibility Study
+
+Before finalizing the Silver layer, a metadata enrichment experiment was conducted by joining the chart fact data with the master songs.csv dataset. The objective was to determine whether the master dataset could improve track names, artist names, labels, and release dates. Although the master dataset contained cleaner metadata, it covered only 85.65% of the chart songs and provided minimal recovery of missing release dates (302 rows) and labels (1 row). In addition, substantial differences were observed in track names and record labels, indicating business-level metadata variations rather than simple formatting inconsistencies. Based on these findings, the Silver layer retained the chart metadata as the authoritative source, while the master datasets were preserved as reference dimensions for future enrichment and expansion.
+
+Data Quality Findings. During validation we observed: Some URIs have multiple display names.
+
+Example
+Banquinho - Ao Vivo
+Banquinho (Ao Vivo)
+
+or
+
+LETE LETE
+Lete Lete
+
+These are metadata variations. The URI remains identical. Therefore URI = TRUE BUSINESS KEY. Design Decision All aggregations in Gold will use GROUP BY uri Never GROUP BY track_name
+
+
+-> Song Lifecycle Classification: Songs were categorized into four lifecycle stages based on their age relative to the chart date: New Release (0–90 days), Recent Hit (91–365 days), Established (1–5 years), and Evergreen (>5 years). This classification enables analysis of catalog freshness, long-term popularity, and market preference for new versus legacy content, supporting executive decision-making in the Market Opportunity Dashboard.

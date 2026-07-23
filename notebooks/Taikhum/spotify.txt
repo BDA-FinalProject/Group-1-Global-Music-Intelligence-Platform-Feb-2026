@@ -1,0 +1,284 @@
+
+Title : Design and develop a cloud-based Global Music Intelligence Platform that leverages Big Data and Machine Learning to analyze streaming behavior, predict music trends, identify emerging artists, evaluate label performance, and support strategic decision-making in the music industry.
+
+
+Problem Statement : The music streaming industry generates massive amounts of data from songs, artists, albums, and user listening activities across multiple countries. However, extracting meaningful insights, identifying emerging artists, predicting hit songs, and understanding global music trends remain challenging due to the scale and complexity of the data.
+This project aims to develop a Global Music Intelligence Platform to analyze Spotify streaming data, discover market trends, evaluate artist and label performance, identify profitable music markets, and predict future song success to provide scalable analytics and data-driven decision support for the music industry.
+
+Why this is a real-world problem
+It directly addresses:
+Record labels wasting money on the wrong artists.
+Difficulty identifying future stars before competitors.
+Challenges in predicting whether a song will become a hit.
+Inefficient marketing campaign allocation.
+Lack of visibility into emerging music markets.
+High uncertainty in artist acquisition and promotion decisions.
+ 
+
+
+
+                         +------------------+
+                         |    artists_df    |
+                         +------------------+
+                         | artist_uri (PK)  |
+                         | artist_name      |
+                         +--------+---------+
+                                  |
+                                  |
+                                  |
+                    +-------------+-------------+
+                    | charts_artists_daily_df   |
+                    +---------------------------+
+                    | uri (FK -> artist_uri)    |
+                    | date                      |
+                    | country                   |
+                    | rank                      |
+                    | peak_rank                 |
+                    | days_on_chart             |
+                    +---------------------------+
+
+
+
++------------------+                 +--------------------+
+|    albums_df     |                 |    artwork_df      |
++------------------+                 +--------------------+
+| album_uri (PK)   |<--------------->| uri                |
+| album_name       |                 | image_url          |
+| artist_uris      |                 | type               |
+| label            |                 +--------------------+
+| release_date     |
++--------+---------+
+         |
+         |
+         |
++--------+------------------+
+| charts_albums_weekly_df   |
++---------------------------+
+| uri (FK -> album_uri)     |
+| date                      |
+| country                   |
+| rank                      |
+| weeks_on_chart            |
+| peak_rank                 |
++---------------------------+
+
+
+
+                     +------------------+
+                     |    songs_df      |
+                     +------------------+
+                     | track_uri (PK)   |
+                     | track_name       |
+                     | artist_uris      |
+                     | artist_names     |
+                     | label            |
+                     | release_date     |
+                     +--------+---------+
+                              |
+                              |
+                              |
+                              |
+                              v
+
+             +----------------------------------+
+             |      charts_songs_daily_df       |
+             +----------------------------------+
+             | uri (FK -> track_uri)           |
+             | date                            |
+             | country                         |
+             | rank                            |
+             | streams                         |
+             | peak_rank                       |
+             | previous_rank                   |
+             | days_on_chart                   |
+             | entry_status                    |
+             +----------------------------------+
+                              |
+                              |
+                              |
+                              v
+
+                     +------------------+
+                     |    links_df      |
+                     +------------------+
+                     | spotify_uri      |
+                     | youtube_video_id |
+                     | youtube_music_id |
+                     +------------------+
+
+
+
+Dataset Summary : 
+
+
+| Dataset                 |                         Rows | Columns |
+| ----------------------- | ---------------------------: | ------: |
+| albums_df               |                       24,675 |       6 |
+| artists_df              |                       63,775 |       2 |
+| artwork_df              |                      295,712 |       4 |
+| charts_albums_weekly_df |                    2,795,375 |      17 |
+| charts_artists_daily_df |                   22,962,712 |      13 |
+| charts_songs_daily_df   |                        ~4cr  |      18 |
+| links_df                |                      101,429 |       6 |
+| songs_df                |                      287,164 |       7 |
+
+
+
+
+1. songs_df
+| Column       | Description                     | Importance                                             |
+| ------------ | ------------------------------- | ------------------------------------------------------ |
+| track_uri    | Unique Spotify ID for each song | **Most Useful** (Primary key, joins with chart tables) |
+| track_name   | Name of the song                | **Most Useful** (used in almost every analysis)        |
+| artist_names | Name(s) of artist(s)            | **Most Useful** (artist performance analysis)          |
+| artist_uris  | Spotify IDs of artists          | **Useful** (joins and multi-artist analysis)           |
+| label        | Record label of song            | **Useful** (label performance analysis)                |
+| release_date | Date song was released          | **Most Useful** (trend and lifecycle analysis)         |
+| all_uris     | Additional Spotify identifiers  | **Useless / Low Value** (rarely used)                  |
+
+
+2. artists_df
+| Column      | Description              | Importance                         |
+| ----------- | ------------------------ | ---------------------------------- |
+| artist_uri  | Unique Spotify artist ID | **Most Useful** (primary key)      |
+| artist_name | Artist name              | **Most Useful** (artist analytics) |
+
+
+3. albums_df
+| Column       | Description        | Importance                       |
+| ------------ | ------------------ | -------------------------------- |
+| album_uri    | Unique album ID    | **Most Useful** (primary key)    |
+| album_name   | Album title        | **Most Useful** (album analysis) |
+| artist_names | Artist(s) of album | **Most Useful**                  |
+| artist_uris  | Artist IDs         | **Useful**                       |
+| label        | Record label       | **Useful**                       |
+| release_date | Album release date | **Most Useful**                  |
+
+
+4. artwork_df
+| Column         | Description                  | Importance                     |
+| -------------- | ---------------------------- | ------------------------------ |
+| uri            | Spotify entity ID            | **Useful** (joins)             |
+| type           | Song/Album/Artist indicator  | **Moderate**                   |
+| image_url      | URL of artwork image         | **Useful** (dashboard visuals) |
+| last_seen_date | Last date image was observed | **Useless / Low Value**        |
+
+
+5. links_df
+| Column             | Description              | Importance              |
+| ------------------ | ------------------------ | ----------------------- |
+| spotify_uri        | Spotify object ID        | **Most Useful** (joins) |
+| type               | Song/Album/Artist        | **Moderate**            |
+| youtube_music_id   | YouTube Music identifier | **Useful**              |
+| youtube_video_id   | YouTube Video identifier | **Useful**              |
+| youtube_browse_id  | Internal YouTube ID      | **Useless / Low Value** |
+| youtube_channel_id | Channel ID               | **Moderate**            |
+
+
+6. charts_songs_daily_df (Most Important Dataset)
+| Column           | Description                      | Importance      |
+| ---------------- | -------------------------------- | --------------- |
+| date             | Date of chart ranking            | **Most Useful** |
+| country          | Country where ranking occurred   | **Most Useful** |
+| rank             | Current chart rank               | **Most Useful** |
+| uri              | Song identifier                  | **Most Useful** |
+| artist_names     | Artist(s) of song                | **Most Useful** |
+| track_name       | Song title                       | **Most Useful** |
+| label            | Record label                     | **Useful**      |
+| peak_rank        | Best rank ever achieved          | **Most Useful** |
+| previous_rank    | Previous day's rank              | **Useful**      |
+| streams          | Number of streams                | **Most Useful** |
+| days_on_chart    | Total days on chart              | **Most Useful** |
+| consecutive_days | Consecutive days on chart        | **Useful**      |
+| entry_status     | New entry / re-entry status      | **Moderate**    |
+| peak_date        | Date when peak rank was achieved | **Moderate**    |
+| entry_rank       | Rank when first entered chart    | **Moderate**    |
+| entry_date       | First appearance date            | **Useful**      |
+| release_date     | Song release date                | **Useful**      |
+| artist_uris      | Artist IDs                       | **Moderate**    |
+
+
+7. charts_artists_daily_df
+| Column           | Description            | Importance      |
+| ---------------- | ---------------------- | --------------- |
+| date             | Chart date             | **Most Useful** |
+| country          | Country                | **Most Useful** |
+| rank             | Artist rank            | **Most Useful** |
+| uri              | Artist identifier      | **Most Useful** |
+| artist_name      | Artist name            | **Most Useful** |
+| peak_rank        | Best rank achieved     | **Most Useful** |
+| previous_rank    | Previous rank          | **Useful**      |
+| days_on_chart    | Total days charted     | **Useful**      |
+| consecutive_days | Continuous chart days  | **Useful**      |
+| entry_status     | New/Re-entry indicator | **Moderate**    |
+| peak_date        | Peak date              | **Moderate**    |
+| entry_rank       | First rank             | **Moderate**    |
+| entry_date       | First appearance date  | **Moderate**    |
+
+
+8. charts_albums_weekly_df
+| Column            | Description             | Importance      |
+| ----------------- | ----------------------- | --------------- |
+| date              | Weekly chart date       | **Most Useful** |
+| country           | Country                 | **Most Useful** |
+| rank              | Album rank              | **Most Useful** |
+| uri               | Album identifier        | **Most Useful** |
+| album_name        | Album title             | **Most Useful** |
+| artist_names      | Artist(s)               | **Most Useful** |
+| label             | Record label            | **Useful**      |
+| peak_rank         | Best rank achieved      | **Most Useful** |
+| previous_rank     | Previous week's rank    | **Useful**      |
+| weeks_on_chart    | Total weeks on chart    | **Most Useful** |
+| consecutive_weeks | Consecutive chart weeks | **Useful**      |
+| entry_status      | New/Re-entry indicator  | **Moderate**    |
+| peak_date         | Peak date               | **Moderate**    |
+| entry_rank        | Initial rank            | **Moderate**    |
+| entry_date        | First chart appearance  | **Moderate**    |
+| release_date      | Album release date      | **Useful**      |
+| artist_uris       | Artist IDs              | **Moderate**    |
+
+Unique songs :  207164
+Unique Artists :  63775
+
+
+Datasets Summary : 
+-> No duplicate rows in any dataset
+-> Dataset-wise null values : 
+a) albums_df = album_name : 1, artist_names : 1, label = 2, release_date : 755
+b) artwork_df = last_seen_date : 22217
+c) charts_albums_weekly_df = album_name : 1542, artist_names : 1542, label : 1557, release_date = 76768
+d) charts_songs_daily_df = artist_names : 44711, track_name : 44711, label : 42993, release_date : 636254
+e) links_df = youtube_music_id : 12184, youtube_video_id : 21778, youtube_browse_id = 101205, youtube_channel_id : 101420 
+f) songs_df : track_name : 1, artist_names : 1, label : 3, release_date : 2608
+
+-> no of countries : 73
+-> dataset is from 1/1/2017 - 20/05/2026
+-> no of songs : 241874
+-> no of artists : 93073
+-> no of labels : 27948
+-> We can drop artwork_df and artists_df and links_df(optional)
+
+Inferences after EDA : 
+1] Music Consumption is Highly Concentrated : A small group of artists and songs generate a disproportionately large share of total streams.
+2] Global Artists Have Significant Competitive Advantage : Artists such as Drake, BTS, Ed Sheeran, Justin Bieber, etc. appear across many countries.
+3] Evergreen Songs Continue Generating Revenue : Several older songs continue receiving streams years after release.
+4] Chart Longevity Matters More Than Viral Popularity : Some songs never achieve Rank 1 but remain on charts for long periods.
+5] Certain Countries Have Diverse Music Preferences : Countries differ significantly in artist and song diversity.
+6] Market Saturation Differs Across Countries : Some countries contain a very large number of competing artists and songs.
+7] Record Labels Show Uneven Performance : A few labels dominate total streams while others have limited market impact.
+8] Some Labels Depend Heavily on Single Artists : Certain labels generate most streams from one or two artists.
+9] Album Success is Influenced by Longevity : Albums remaining on charts longer usually outperform short-lived albums.
+10] International Reach Drives Streaming Power : Artists present in many countries usually generate significantly higher streams.
+
+
+Feature Engineering : 
+1] Artist Export Score – Measures an artist's global reach based on streams and number of countries.
+2] Evergreen Song Index – Identifies songs that remain popular over a long period.
+3] Artist Sustainability Score – Evaluates long-term artist success using chart longevity and peak rank.
+4] Album Longevity Score – Measures album performance based on weeks on chart and ranking.
+5] Market Saturation Index – Indicates competition level within a country.
+6] Music Diversity Score – Measures the variety of songs and artists consumed in a market.
+7] Collaboration Indicator – Categorizes songs as solo or collaborative tracks.
+8] Song Age – Calculates the age of a song from its release date.
+9] Global Reach Features – Number of countries where a song, artist, or album appears.
+10] Hit Score – Composite metric created using streams, rankings, chart duration, and geographic reach to support hit prediction.
