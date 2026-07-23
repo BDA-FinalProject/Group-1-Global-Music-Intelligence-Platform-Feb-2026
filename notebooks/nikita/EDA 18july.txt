@@ -1,0 +1,1288 @@
+icrosoft Windows [Version 10.0.22621.4317]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\LENOVO>set SPARK_HOME=C:\Spark\spark-3.5.6-bin-hadoop3
+
+C:\Users\LENOVO>set HADOOP_HOME=C:\hadoop
+
+C:\Users\LENOVO>set PATH=%SPARK_HOME%\bin;%HADOOP_HOME%\bin;%PATH%
+
+C:\Users\LENOVO>
+C:\Users\LENOVO>python
+Python 3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)] on win32
+Type "help", "copyright", "credits" or "license" for more information.
+>>> songs_path = r"C:\Users\LENOVO\Documents\SM VITA\Project\dataset\main\songs_parquet-20260625T1232\
+40Z-3-001\songs_parquet"
+>>> df = spark.read.parquet(songs_path)
+Traceback (most recent call last):
+  File "<python-input-1>", line 1, in <module>
+    df = spark.read.parquet(songs_path)
+         ^^^^^
+NameError: name 'spark' is not defined
+>>> print(spark.version)
+Traceback (most recent call last):
+  File "<python-input-2>", line 1, in <module>
+    print(spark.version)
+          ^^^^^
+NameError: name 'spark' is not defined
+>>> from pyspark.sql import SparkSession
+...
+... spark = (
+...     SparkSession.builder
+...     .appName("SpotifyEDA")
+...     .master("local[2]")
+...     .config("spark.driver.memory", "2g")
+...     .config("spark.sql.shuffle.partitions", "8")
+...     .config("spark.default.parallelism", "4")
+...     .getOrCreate()
+... )
+... print(spark.version)
+... from pyspark.sql import SparkSession
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+3.5.6
+>>> songs_path = r"C:\Users\LENOVO\Documents\SM VITA\Project\dataset\main\songs_parquet-20260625T1232\
+40Z-3-001\songs_parquet"
+>>> df = spark.read.parquet(songs_path)
+>>> df.printSchema()
+root
+ |-- date: string (nullable = true)
+ |-- country: string (nullable = true)
+ |-- rank: long (nullable = true)
+ |-- uri: string (nullable = true)
+ |-- artist_names: string (nullable = true)
+ |-- track_name: string (nullable = true)
+ |-- label: string (nullable = true)
+ |-- peak_rank: long (nullable = true)
+ |-- previous_rank: long (nullable = true)
+ |-- days_on_chart: long (nullable = true)
+ |-- streams: long (nullable = true)
+ |-- consecutive_days: long (nullable = true)
+ |-- entry_status: string (nullable = true)
+ |-- peak_date: string (nullable = true)
+ |-- entry_rank: long (nullable = true)
+ |-- entry_date: string (nullable = true)
+ |-- release_date: string (nullable = true)
+ |-- artist_uris: string (nullable = true)
+
+>>> import os
+... os.path.exists(songs_path)
+...
+True
+>>> from pyspark.sql.functions import col
+...
+... india_df = df.filter(col("country") == "in")
+...
+>>> from pyspark.sql.functions import countDistinct
+...
+... daily_releases = (
+...     india_df
+...     .groupBy("release_date")
+...     .agg(countDistinct("uri").alias("songs_released"))
+... )
+...
+>>> from pyspark.sql.functions import avg
+...
+... daily_releases.select(
+...     avg("songs_released").alias("average_songs_per_day")
+... ).show()
+...
++---------------------+
+|average_songs_per_day|
++---------------------+
+|    2.480558325024925|
++---------------------+
+
+>>> india_df.select(countDistinct("uri").alias("total_unique_songs")).show()
++------------------+
+|total_unique_songs|
++------------------+
+|              4973|
++------------------+
+
+>>> from pyspark.sql.functions import substring
+...
+... monthly = (
+...     india_df
+...     .withColumn("month", substring("release_date", 1, 7))
+...     .groupBy("month")
+...     .agg(countDistinct("uri").alias("songs"))
+... )
+...
+... monthly.show()
+...
++-------+-----+
+|  month|songs|
++-------+-----+
+|2021-04|   25|
+|2015-12|    2|
+|2007-10|    1|
+|2014-12|    5|
+|2023-03|   62|
+|2022-11|   40|
+|2022-12|   31|
+|1991-01|    1|
+|2024-04|   37|
+|2025-04|   20|
+|2014-11|    6|
+|2026-05|   27|
+|2020-06|   33|
+|2022-06|   37|
+|1998-03|    1|
+|1982-11|    1|
+|2013-07|    4|
+|2011-11|    2|
+|2014-10|    2|
+|2007-09|    4|
++-------+-----+
+only showing top 20 rows
+
+>>> df.filter(df.country == "IN").count()
+... df.select("country").distinct().orderBy("country").show(100, truncate=False)
+...
++-------+
+|country|
++-------+
+|ae     |
+|ar     |
+|at     |
+|au     |
+|be     |
+|bg     |
+|bo     |
+|br     |
+|by     |
+|ca     |
+|ch     |
+|cl     |
+|co     |
+|cr     |
+|cz     |
+|de     |
+|dk     |
+|do     |
+|ec     |
+|ee     |
+|eg     |
+|es     |
+|fi     |
+|fr     |
+|gb     |
+|global |
+|gr     |
+|gt     |
+|hk     |
+|hn     |
+|hu     |
+|id     |
+|ie     |
+|il     |
+|in     |
+|is     |
+|it     |
+|jp     |
+|kr     |
+|kz     |
+|lt     |
+|lu     |
+|lv     |
+|ma     |
+|mx     |
+|my     |
+|ng     |
+|ni     |
+|nl     |
+|no     |
+|nz     |
+|pa     |
+|pe     |
+|ph     |
+|pk     |
+|pl     |
+|pt     |
+|py     |
+|ro     |
+|sa     |
+|se     |
+|sg     |
+|sk     |
+|sv     |
+|th     |
+|tr     |
+|tw     |
+|ua     |
+|us     |
+|uy     |
+|ve     |
+|vn     |
+|za     |
++-------+
+
+>>> import sys
+...
+... sys.stdout = open("eda_output.txt", "w")
+...
+... df.printSchema()
+... df.show()
+...
+... sys.stdout.close()
+...
+Traceback (most recent call last):
+  File "<python-input-14>", line 6, in <module>
+    df.show()
+    ~~~~~~~^^
+  File "C:\Users\LENOVO\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\pyspark\sql\dataframe.py", line 947, in show
+    print(self._show_string(n, truncate, vertical))
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\LENOVO\AppData\Local\Python\pythoncore-3.14-64\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u0148' in position 2626: character maps to <undefined>
+>>> from pyspark.sql.functions import substring, countDistinct, desc
+...
+... top5_countries = (
+...     df
+...     .withColumn("year", substring("release_date", 1, 4))
+...     .groupBy("year", "country")
+...     .agg(countDistinct("uri").alias("songs_released"))
+...     .orderBy("year", desc("songs_released"))
+... )
+...
+... top5_countries.show(100, truncate=False)
+...
+>>> import sys
+... print(sys.stdout)
+...
+>>> import sys
+>>>
+>>> sys.stdout = sys.__stdout__
+>>> print("Hello")
+Hello
+>>> top5_countries.show(10, truncate=False)
++----+-------+--------------+
+|year|country|songs_released|
++----+-------+--------------+
+|NULL|se     |355           |
+|NULL|ie     |338           |
+|NULL|gb     |317           |
+|NULL|fi     |227           |
+|NULL|in     |226           |
+|NULL|cl     |203           |
+|NULL|pe     |196           |
+|NULL|ca     |189           |
+|NULL|no     |184           |
+|NULL|lv     |174           |
++----+-------+--------------+
+only showing top 10 rows
+
+>>> df.select("release_date").show(20, truncate=False)
++------------+
+|release_date|
++------------+
+|2024-05-17  |
+|2024-08-30  |
+|2025-02-21  |
+|2005-05-23  |
+|2009-01-01  |
+|2017-06-23  |
+|2025-02-07  |
+|2022-03-11  |
+|1991-09-26  |
+|2024-11-08  |
+|2010-01-01  |
+|2023-12-01  |
+|2023-11-10  |
+|2011-01-01  |
+|2024-10-31  |
+|2018-11-02  |
+|2016-02-23  |
+|2012-01-01  |
+|2014-01-01  |
+|2017-03-03  |
++------------+
+only showing top 20 rows
+
+>>> substring("release_date", 1, 4)
+Column<'substring(release_date, 1, 4)'>
+>>> from pyspark.sql.functions import substring
+...
+... df.select(
+...     "release_date",
+...     substring("release_date", 1, 4).alias("year")
+... ).show(20, truncate=False)
+...
++------------+----+
+|release_date|year|
++------------+----+
+|2024-05-17  |2024|
+|2024-08-30  |2024|
+|2025-02-21  |2025|
+|2005-05-23  |2005|
+|2009-01-01  |2009|
+|2017-06-23  |2017|
+|2025-02-07  |2025|
+|2022-03-11  |2022|
+|1991-09-26  |1991|
+|2024-11-08  |2024|
+|2010-01-01  |2010|
+|2023-12-01  |2023|
+|2023-11-10  |2023|
+|2011-01-01  |2011|
+|2024-10-31  |2024|
+|2018-11-02  |2018|
+|2016-02-23  |2016|
+|2012-01-01  |2012|
+|2014-01-01  |2014|
+|2017-03-03  |2017|
++------------+----+
+only showing top 20 rows
+
+>>> from pyspark.sql.functions import col
+...
+... df.filter(
+...     (col("release_date").isNull()) | (col("release_date") == "")
+... ).count()
+...
+638418
+>>> from pyspark.sql.functions import year, to_date
+...
+... df.select(
+...     "release_date",
+...     year(to_date("release_date")).alias("year")
+... ).show(20, truncate=False)
+...
++------------+----+
+|release_date|year|
++------------+----+
+|2024-05-17  |2024|
+|2024-08-30  |2024|
+|2025-02-21  |2025|
+|2005-05-23  |2005|
+|2009-01-01  |2009|
+|2017-06-23  |2017|
+|2025-02-07  |2025|
+|2022-03-11  |2022|
+|1991-09-26  |1991|
+|2024-11-08  |2024|
+|2010-01-01  |2010|
+|2023-12-01  |2023|
+|2023-11-10  |2023|
+|2011-01-01  |2011|
+|2024-10-31  |2024|
+|2018-11-02  |2018|
+|2016-02-23  |2016|
+|2012-01-01  |2012|
+|2014-01-01  |2014|
+|2017-03-03  |2017|
++------------+----+
+only showing top 20 rows
+
+>>> from pyspark.sql.functions import col, substring, countDistinct, desc
+...
+... top5_countries = (
+...     df
+...     .filter(
+...         col("release_date").isNotNull() &
+...         (col("release_date") != "")
+...     )
+...     .withColumn("year", substring("release_date", 1, 4))
+...     .groupBy("year", "country")
+...     .agg(countDistinct("uri").alias("songs_released"))
+...     .orderBy(desc("songs_released"))
+... )
+...
+... top5_countries.show(20, truncate=False)
+...
++----+-------+--------------+
+|year|country|songs_released|
++----+-------+--------------+
+|2020|ch     |2284          |
+|2021|de     |2251          |
+|2022|de     |2189          |
+|2021|ch     |2123          |
+|2018|tw     |2090          |
+|2019|ch     |2066          |
+|2020|de     |2044          |
+|2025|de     |2008          |
+|2024|de     |1998          |
+|2023|de     |1985          |
+|2018|ch     |1984          |
+|2017|tw     |1910          |
+|2020|us     |1903          |
+|2022|ch     |1889          |
+|2021|fr     |1870          |
+|2020|fr     |1866          |
+|2023|ch     |1825          |
+|2020|nl     |1818          |
+|2018|fr     |1815          |
+|2018|se     |1811          |
++----+-------+--------------+
+only showing top 20 rows
+
+>>> from pyspark.sql.functions import col, substring, countDistinct, desc, dense_rank
+... from pyspark.sql.window import Window
+...
+... country_year = (
+...     df
+...     .filter(
+...         col("release_date").isNotNull() &
+...         (col("release_date") != "")
+...     )
+...     .withColumn("year", substring("release_date", 1, 4))
+...     .groupBy("year", "country")
+...     .agg(countDistinct("uri").alias("songs_released"))
+... )
+...
+... windowSpec = Window.partitionBy("year").orderBy(desc("songs_released"))
+...
+... top5_each_year = (
+...     country_year
+...     .withColumn("rank", dense_rank().over(windowSpec))
+...     .filter(col("rank") <= 2)
+...     .orderBy("year", "rank")
+... )
+...
+... top5_each_year.show(10, truncate=False)
+...
++----+-------+--------------+----+
+|year|country|songs_released|rank|
++----+-------+--------------+----+
+|1840|in     |1             |1   |
+|1850|pk     |1             |1   |
+|1850|no     |1             |1   |
+|1850|lt     |1             |1   |
+|1850|ch     |1             |1   |
+|1850|bg     |1             |1   |
+|1850|sk     |1             |1   |
+|1870|in     |2             |1   |
+|1894|in     |1             |1   |
+|1900|in     |2             |1   |
++----+-------+--------------+----+
+only showing top 10 rows
+
+>>> from pyspark.sql.functions import col, substring, countDistinct, desc, row_number
+... from pyspark.sql.window import Window
+...
+... # Count unique songs released by each country every year
+... country_year = (
+...     df
+...     .filter(
+...         col("release_date").isNotNull() &
+...         (col("release_date") != "")
+...     )
+...     .withColumn("year", substring("release_date", 1, 4))
+...     .groupBy("year", "country")
+...     .agg(countDistinct("uri").alias("songs_released"))
+... )
+...
+... # Rank countries within each year
+... windowSpec = Window.partitionBy("year").orderBy(desc("songs_released"))
+...
+... top_country_each_year = (
+...     country_year
+...     .withColumn("rank", row_number().over(windowSpec))
+...     .filter(col("rank") == 1)
+...     .select("year", "country", "songs_released")
+...     .orderBy("year")
+... )
+...
+... top_country_each_year.show(100, truncate=False)
+...
++----+-------+--------------+
+|year|country|songs_released|
++----+-------+--------------+
+|1840|in     |1             |
+|1850|pk     |1             |
+|1870|in     |2             |
+|1894|in     |1             |
+|1900|in     |2             |
+|1903|in     |1             |
+|1905|ph     |2             |
+|1920|sa     |2             |
+|1929|in     |1             |
+|1930|no     |2             |
+|1931|pt     |1             |
+|1934|in     |1             |
+|1939|sa     |1             |
+|1942|us     |2             |
+|1943|tr     |1             |
+|1944|global |3             |
+|1945|ca     |12            |
+|1948|co     |2             |
+|1949|ca     |5             |
+|1950|ca     |1             |
+|1951|se     |1             |
+|1953|gb     |1             |
+|1954|gb     |2             |
+|1955|nl     |1             |
+|1956|se     |1             |
+|1957|ca     |10            |
+|1958|nl     |2             |
+|1959|ca     |8             |
+|1960|se     |10            |
+|1961|us     |3             |
+|1962|hn     |9             |
+|1963|fr     |8             |
+|1964|be     |11            |
+|1965|us     |14            |
+|1966|ie     |9             |
+|1967|co     |16            |
+|1968|us     |14            |
+|1969|ie     |13            |
+|1970|gb     |20            |
+|1971|is     |25            |
+|1972|ie     |10            |
+|1973|pa     |35            |
+|1974|gb     |9             |
+|1975|ie     |18            |
+|1976|gb     |10            |
+|1977|gb     |30            |
+|1978|ie     |22            |
+|1979|us     |17            |
+|1980|ie     |15            |
+|1981|za     |18            |
+|1982|gb     |22            |
+|1983|gb     |15            |
+|1984|gb     |30            |
+|1985|ie     |23            |
+|1986|mx     |27            |
+|1987|ie     |47            |
+|1988|ie     |17            |
+|1989|se     |23            |
+|1990|cl     |18            |
+|1991|ie     |38            |
+|1992|ie     |17            |
+|1993|se     |32            |
+|1994|cz     |36            |
+|1995|cl     |53            |
+|1996|ie     |24            |
+|1997|ie     |48            |
+|1998|cz     |76            |
+|1999|ie     |51            |
+|2000|gb     |55            |
+|2001|gb     |56            |
+|2002|tw     |51            |
+|2003|tw     |58            |
+|2004|gb     |46            |
+|2005|tw     |76            |
+|2006|cl     |85            |
+|2007|tw     |104           |
+|2008|tw     |93            |
+|2009|tw     |102           |
+|2010|gb     |100           |
+|2011|ie     |102           |
+|2012|ie     |120           |
+|2013|ie     |122           |
+|2014|lv     |163           |
+|2015|co     |298           |
+|2016|tw     |437           |
+|2017|tw     |1910          |
+|2018|tw     |2090          |
+|2019|ch     |2066          |
+|2020|ch     |2284          |
+|2021|de     |2251          |
+|2022|de     |2189          |
+|2023|de     |1985          |
+|2024|de     |1998          |
+|2025|de     |2008          |
+|2026|fi     |684           |
++----+-------+--------------+
+
+>>> from pyspark.sql.functions import countDistinct
+...
+... df.select(
+...     countDistinct("artist_names").alias("unique_artist_names")
+... ).show()
+...
++-------------------+
+|unique_artist_names|
++-------------------+
+|              93331|
++-------------------+
+
+>>> from pyspark.sql.functions import countDistinct
+...
+... df.select(
+...     countDistinct("artist_uris").alias("unique_artists")
+... ).show()
+...
++--------------+
+|unique_artists|
++--------------+
+|         93718|
++--------------+
+
+>>> from pyspark.sql.functions import split, explode, trim, countDistinct
+...
+... unique_artists = (
+...     df
+...     .select(explode(split("artist_names", ",")).alias("artist"))
+...     .select(trim("artist").alias("artist"))
+...     .agg(countDistinct("artist").alias("unique_artists"))
+... )
+...
+... unique_artists.show()
+...
++--------------+
+|unique_artists|
++--------------+
+|         93383|
++--------------+
+
+>>> from pyspark.sql.functions import (
+...     split, explode, trim, substring,
+...     countDistinct, desc, col, row_number
+... )
+... from pyspark.sql.window import Window
+...
+... # Count unique songs released by each artist every year
+... artist_year = (
+...     df
+...     .filter(
+...         col("release_date").isNotNull() &
+...         (col("release_date") != "")
+...     )
+...     .withColumn("year", substring("release_date", 1, 4))
+...     .withColumn("artist", explode(split(col("artist_names"), ",")))
+...     .withColumn("artist", trim(col("artist")))
+...     .groupBy("year", "artist")
+...     .agg(countDistinct("uri").alias("songs_released"))
+... )
+...
+... # Rank artists within each year
+... windowSpec = Window.partitionBy("year").orderBy(desc("songs_released"))
+...
+... top_artist_each_year = (
+...     artist_year
+...     .withColumn("rank", row_number().over(windowSpec))
+...     .filter(col("rank") == 1)
+...     .select("year", "artist", "songs_released")
+...     .orderBy("year")
+... )
+...
+... top_artist_each_year.show(30, truncate=False)
+...
++----+--------------------------------------------+--------------+
+|year|artist                                      |songs_released|
++----+--------------------------------------------+--------------+
+|1840|Thezth|Konina|Arl1ny                        |1             |
+|1850|Thezth|Konina|Arl1ny                        |1             |
+|1870|jsa|can du weisch|bert                      |1             |
+|1894|Styrx|utku INC|Thezth                       |1             |
+|1900|The Beverley Sisters                        |1             |
+|1903|utku INC|Styrx|Thezth                       |1             |
+|1905|Sponge Cola                                 |1             |
+|1920|KaSuo                                       |1             |
+|1929|utku INC|Styrx|Thezth                       |1             |
+|1930|Jussi Björling                              |2             |
+|1931|Jussi Björling                              |1             |
+|1939|Umm Kulthum                                 |1             |
+|1942|Bing Crosby|Bob Crosby & His Orchestra      |2             |
+|1943|bvrat|farketmez|ben10rb|indracan0           |1             |
+|1944|Judy Garland                                |3             |
+|1945|Bing Crosby                                 |7             |
+|1948|Julio Jaramillo                             |3             |
+|1949|Bing Crosby|The Andrews Sisters             |5             |
+|1950|Kay Starr                                   |1             |
+|1951|The Weavers                                 |1             |
+|1953|Gayla Peevey                                |1             |
+|1954|Rosemary Clooney|Percy Faith & His Orchestra|2             |
+|1955|Mel Tormé                                   |1             |
+|1956|Broadday Assassin                           |1             |
+|1957|Elvis Presley                               |7             |
+|1958|Johnny Mathis|Percy Faith & His Orchestra   |2             |
+|1959|Dean Martin                                 |6             |
+|1960|Ella Fitzgerald                             |15            |
+|1961|Charles Aznavour                            |2             |
+|1962|Damiron                                     |7             |
++----+--------------------------------------------+--------------+
+only showing top 30 rows
+
+>>> from pyspark.sql.functions import (
+...     split, explode, trim, substring,
+...     countDistinct, desc, col, row_number
+... )
+... from pyspark.sql.window import Window
+...
+... # Count unique songs released by each artist every year
+... artist_year = (
+...     df
+...     .filter(
+...         col("release_date").isNotNull() &
+...         (col("release_date") != "")
+...     )
+...     .withColumn("year", substring("release_date", 1, 4))
+...     .withColumn("artist", explode(split(col("artist_names"), ",")))
+...     .withColumn("artist", trim(col("artist")))
+...     .groupBy("year", "artist")
+...     .agg(countDistinct("uri").alias("songs_released"))
+... )
+...
+... # Rank artists within each year
+... windowSpec = Window.partitionBy("year").orderBy(desc("songs_released"))
+...
+... top_artist_each_year = (
+...     artist_year
+...     .withColumn("rank", row_number().over(windowSpec))
+...     .filter(col("rank") == 1)
+...     .select("year", "artist", "songs_released")
+...     .orderBy("year")
+... )
+...
+... top_artist_each_year.show(100, truncate=False)
+...
++----+----------------------------------------------------------------------------------------------+--------------+
+|year|artist                                                                                        |songs_released|
++----+----------------------------------------------------------------------------------------------+--------------+
+|1840|Thezth|Konina|Arl1ny                                                                          |1             |
+|1850|Thezth|Konina|Arl1ny                                                                          |1             |
+|1870|jsa|can du weisch|bert                                                                        |1             |
+|1894|Styrx|utku INC|Thezth                                                                         |1             |
+|1900|The Beverley Sisters                                                                          |1             |
+|1903|utku INC|Styrx|Thezth                                                                         |1             |
+|1905|Sponge Cola                                                                                   |1             |
+|1920|KaSuo                                                                                         |1             |
+|1929|utku INC|Styrx|Thezth                                                                         |1             |
+|1930|Jussi Björling                                                                                |2             |
+|1931|Jussi Björling                                                                                |1             |
+|1939|Umm Kulthum                                                                                   |1             |
+|1942|Bing Crosby|Bob Crosby & His Orchestra                                                        |2             |
+|1943|bvrat|farketmez|ben10rb|indracan0                                                             |1             |
+|1944|Judy Garland                                                                                  |3             |
+|1945|Bing Crosby                                                                                   |7             |
+|1948|Julio Jaramillo                                                                               |3             |
+|1949|Bing Crosby|The Andrews Sisters                                                               |5             |
+|1950|Kay Starr                                                                                     |1             |
+|1951|The Weavers                                                                                   |1             |
+|1953|Gayla Peevey                                                                                  |1             |
+|1954|Rosemary Clooney|Percy Faith & His Orchestra                                                  |2             |
+|1955|Mel Tormé                                                                                     |1             |
+|1956|Broadday Assassin                                                                             |1             |
+|1957|Elvis Presley                                                                                 |7             |
+|1958|Johnny Mathis|Percy Faith & His Orchestra                                                     |2             |
+|1959|Dean Martin                                                                                   |6             |
+|1960|Ella Fitzgerald                                                                               |15            |
+|1961|Charles Aznavour                                                                              |2             |
+|1962|Damiron                                                                                       |7             |
+|1963|Andy Williams                                                                                 |3             |
+|1964|Brenda Lee                                                                                    |4             |
+|1965|Burl Ives                                                                                     |8             |
+|1966|The Beach Boys                                                                                |4             |
+|1967|Los Corraleros De Majagual|Eliseo Herrera                                                     |8             |
+|1968|Tony Bennett                                                                                  |6             |
+|1969|Per Asplin                                                                                    |4             |
+|1970|The Jackson 5                                                                                 |10            |
+|1971|Elly Vilhjálms|Vilhjálmur Vilhjálmsson                                                        |9             |
+|1972|Vicente Fernández                                                                             |3             |
+|1973|Héctor Lavoe|Willie Colón|Yomo Toro                                                           |22            |
+|1974|Elton John                                                                                    |2             |
+|1975|Tito Fernández                                                                                |6             |
+|1976|Belchior                                                                                      |5             |
+|1977|Fleetwood Mac                                                                                 |11            |
+|1978|Björgvin Halldórsson                                                                          |7             |
+|1979|Pink Floyd                                                                                    |6             |
+|1980|José José                                                                                     |5             |
+|1981|Boney M.                                                                                      |15            |
+|1982|Fernando Villalona                                                                            |6             |
+|1983|Los Hermanos Flores                                                                           |9             |
+|1984|Bruce Springsteen                                                                             |6             |
+|1985|Johnny Ventura y su Combo                                                                     |9             |
+|1986|Los Hermanos Flores                                                                           |8             |
+|1987|U2                                                                                            |17            |
+|1988|Dave Dobbyn|Herbs                                                                             |5             |
+|1989|Karavan                                                                                       |7             |
+|1990|Jose Mari Chan                                                                                |12            |
+|1991|Guns N' Roses                                                                                 |10            |
+|1992|Fito Paez                                                                                     |6             |
+|1993|Magnus Uggla                                                                                  |5             |
+|1994|Bambini Di Praga                                                                              |24            |
+|1995|Hugo Lagos                                                                                    |11            |
+|1996|Bambini Di Praga                                                                              |15            |
+|1997|Maracaibo 15                                                                                  |12            |
+|1998|Dětský sbor Camerata                                                                          |57            |
+|1999|Nicholas Tse                                                                                  |10            |
+|2000|Linkin Park                                                                                   |14            |
+|2001|Jay Chou                                                                                      |13            |
+|2002|kent                                                                                          |11            |
+|2003|Linkin Park                                                                                   |13            |
+|2004|RBD|Anahí|Dulce María|Maite Perroni|Christian Chávez|Christopher von Uckermann|Alfonso Herrera|10            |
+|2005|RBD|Anahí|Dulce María|Maite Perroni|Christian Chávez|Christopher von Uckermann|Alfonso Herrera|15            |
+|2006|De La Ghetto|Randy Nota Loca                                                                  |30            |
+|2007|Dětský sbor                                                                                   |40            |
+|2008|Chico Trujillo                                                                                |10            |
+|2009|Aventura                                                                                      |13            |
+|2010|Shu-Bi-Dua                                                                                    |23            |
+|2011|Ballet Folklórico Alma Chilena                                                                |16            |
+|2012|Hafdís Huld                                                                                   |30            |
+|2013|BTS                                                                                           |21            |
+|2014|BTS                                                                                           |35            |
+|2015|Rodolfo Aicardi|Los Hispanos                                                                  |42            |
+|2016|BTS                                                                                           |43            |
+|2017|Jul                                                                                           |52            |
+|2018|BTS                                                                                           |60            |
+|2019|Jul                                                                                           |63            |
+|2020|BTS                                                                                           |99            |
+|2021|Die drei ???                                                                                  |102           |
+|2022|Die drei ???                                                                                  |126           |
+|2023|Die drei ???                                                                                  |88            |
+|2024|Die drei ???                                                                                  |129           |
+|2025|Die drei ???                                                                                  |169           |
+|2026|Die drei ???                                                                                  |72            |
++----+----------------------------------------------------------------------------------------------+--------------+
+
+>>> from pyspark.sql.functions import col, count
+...
+... top5_50days = (
+...     df
+...     .filter(col("rank") <= 5)
+...     .groupBy("uri", "track_name", "artist_names")
+...     .agg(count("*").alias("days_in_top5"))
+...     .filter(col("days_in_top5") >= 50)
+...     .orderBy(col("days_in_top5").desc())
+... )
+...
+... top5_50days.show(100, truncate=False)
+...
++------------------------------------+-----------------------------------------------------------------------+---------------------------------------------------------+------------+
+|uri                                 |track_name                                                             |artist_names                                             |days_in_top5|
++------------------------------------+-----------------------------------------------------------------------+---------------------------------------------------------+------------+
+|spotify:track:7qiZfU4dY1lWllzX7mPBI3|Shape of You                                                           |Ed Sheeran                                               |8690        |
+|spotify:track:1rgnBhdG2JDFTbYkYRZAku|Dance Monkey                                                           |Tones And I                                              |7180        |
+|spotify:track:7tI8dRuH2Yc6RuoTjxo4dU|Who                                                                    |Jimin                                                    |7110        |
+|spotify:track:0bYg9bo50gSsH3LtXe2SQn|All I Want for Christmas Is You                                        |Mariah Carey                                             |6017        |
+|spotify:track:5PjdY0CKGZdEuoNab3yDmX|STAY (with Justin Bieber)                                              |The Kid LAROI|Justin Bieber                              |5476        |
+|spotify:track:02MWAaffLxlfxAUY7c5dvx|Heat Waves                                                             |Glass Animals                                            |4952        |
+|spotify:track:5CtI0qwDJkDQGwXD1H1cLb|Despacito - Remix                                                      |Luis Fonsi|Daddy Yankee|Justin Bieber                    |4531        |
+|spotify:track:0VjIjW4GlUZAMYd2vXMi3b|Blinding Lights                                                        |The Weeknd                                               |4440        |
+|spotify:track:6iOndD4OFo7GkaDypWQIou|La Plena - W Sound 05                                                  |W Sound|Beéle|Ovy On The Drums                           |4218        |
+|spotify:track:2FRnf9qhLbvw8fu4IBXx78|Last Christmas                                                         |Wham!                                                    |4146        |
+|spotify:track:2plbrEY59IikOBgBGLjaoe|Die With A Smile                                                       |Lady Gaga|Bruno Mars                                     |4070        |
+|spotify:track:6Sq7ltF9Qa7SNFBsV5Cogx|Me Porto Bonito                                                        |Bad Bunny|Chencho Corleone                               |3905        |
+|spotify:track:6De0lHrwBfPfrhorm9q1Xl|Me Rehúso                                                              |Danny Ocean                                              |3877        |
+|spotify:track:7bywjHOc0wSjGGbj04XbVi|LUNA                                                                   |Feid|ATL Jacob                                           |3820        |
+|spotify:track:2Fxmhks0bxGSBdJ92vM42m|bad guy                                                                |Billie Eilish                                            |3797        |
+|spotify:track:6dOtVTDdiauQNBQEDOtlAB|BIRDS OF A FEATHER                                                     |Billie Eilish                                            |3781        |
+|spotify:track:2JPLbjOn0wPCngEot2STUS|Yonaguni                                                               |Bad Bunny                                                |3744        |
+|spotify:track:6v3KW9xbzN5yKLt9YKDYA2|Señorita                                                               |Shawn Mendes|Camila Cabello                              |3641        |
+|spotify:track:27xkOIER6uDLKALIelHylZ|Don’t Say You Love Me                                                  |Jin                                                      |3496        |
+|spotify:track:3tjFYV6RSFtuktYl3ZtYcq|Mood (feat. iann dior)                                                 |24kGoldn|iann dior                                       |3452        |
+|spotify:track:2RkZ5LkEzeHGRsmDqKwmaJ|Ordinary                                                               |Alex Warren                                              |3158        |
+|spotify:track:4Dvkj6JhhA12EX05fT7y2e|As It Was                                                              |Harry Styles                                             |3156        |
+|spotify:track:7wGoVu4Dady5GV0Sv4UIsx|rockstar (feat. 21 Savage)                                             |Post Malone|21 Savage                                    |3144        |
+|spotify:track:24Yi9hE78yPEbZ4kxyoXAI|Roses - Imanbek Remix                                                  |SAINt JHN|Imanbek                                        |3080        |
+|spotify:track:2lTm559tuIvatlT1u0JYG2|BAILE INoLVIDABLE                                                      |Bad Bunny                                                |3064        |
+|spotify:track:4MzXwWMhyBbmu6hOcLVD49|DÁKITI                                                                 |Bad Bunny|JHAYCO                                         |2957        |
+|spotify:track:1CPZ5BxNNd0n0nF4Orb9JS|Golden                                                                 |HUNTR/X|EJAE|AUDREY NUNA|REI AMI|KPop Demon Hunters Cast |2952        |
+|spotify:track:5ww2BF9slyYgNOk37BlC4u|La Bachata                                                             |Manuel Turizo                                            |2940        |
+|spotify:track:2HRgqmZQC0MC7GeNuDIXHN|Seven (feat. Latto) (Explicit Ver.)                                    |Jung Kook|Latto                                          |2910        |
+|spotify:track:0ofbQMrRDsUaVKq2mGLEAb|Havana (feat. Young Thug)                                              |Camila Cabello|Young Thug                                |2850        |
+|spotify:track:2tTmW7RDtMQtBk7m2rYeSw|Quevedo: Bzrp Music Sessions, Vol. 52/66                               |Bizarrap|Quevedo                                         |2782        |
+|spotify:track:7ytR5pFWmSjzHJIeQkgog4|ROCKSTAR (feat. Roddy Ricch)                                           |DaBaby|Roddy Ricch                                       |2775        |
+|spotify:track:2XW4DbS6NddZxRPm5rMCeY|God's Plan                                                             |Drake                                                    |2773        |
+|spotify:track:2rb5MvYT7ZIxbKW5hfcHx8|Mi Gente                                                               |J Balvin|Willy William                                   |2763        |
+|spotify:track:0nbXyq5TXYPCO7pr3N8S4I|The Box                                                                |Roddy Ricch                                              |2681        |
+|spotify:track:5Eax0qFko2dh7Rl2lYs3bx|Efecto                                                                 |Bad Bunny                                                |2604        |
+|spotify:track:53iuhJlwXhSER5J2IYYv1W|The Fate of Ophelia                                                    |Taylor Swift                                             |2572        |
+|spotify:track:4w8niZpiMy6qz1mntFA5uM|Taki Taki (with Selena Gomez, Ozuna & Cardi B)                         |DJ Snake|Selena Gomez|Ozuna|Cardi B                      |2555        |
+|spotify:track:4aWmUDTfIPGksMNLV2rQP2|Despacito                                                              |Luis Fonsi|Daddy Yankee                                  |2548        |
+|spotify:track:6PQ88X9TkUIAUIZJHW2upE|Bad Habits                                                             |Ed Sheeran                                               |2544        |
+|spotify:track:4uUG5RXrOk84mYEfFvj3cK|I'm Good (Blue)                                                        |David Guetta|Bebe Rexha                                  |2523        |
+|spotify:track:7lPN2DXiMsVn7XUKtOW1CS|drivers license                                                        |Olivia Rodrigo                                           |2440        |
+|spotify:track:6WatFBLVB0x077xWeoVc2k|Si Antes Te Hubiera Conocido                                           |KAROL G                                                  |2439        |
+|spotify:track:3rUGC1vUpkDG9CZFHMur1t|greedy                                                                 |Tate McRae                                               |2433        |
+|spotify:track:4gzsuuZypVbxs0Af1LSZyB|Lo Siento BB:/ (with Bad Bunny & Julieta Venegas)                      |Tainy|Bad Bunny|Julieta Venegas                          |2425        |
+|spotify:track:3sK8wGT43QFpWrvNQsrQya|DtMF                                                                   |Bad Bunny                                                |2407        |
+|spotify:track:3nqQXoyQOWXiESFLlDF1hG|Unholy (feat. Kim Petras)                                              |Sam Smith|Kim Petras                                     |2338        |
+|spotify:track:1IHWl5LamUGEuP4ozKQSXZ|Tití Me Preguntó                                                       |Bad Bunny                                                |2335        |
+|spotify:track:2ksOAxtIxY8yElEWw8RhgK|China                                                                  |Anuel AA|Daddy Yankee|KAROL G|J Balvin|Ozuna             |2316        |
+|spotify:track:3k3NWokhRRkEPhCzPmV8TW|Ojitos Lindos                                                          |Bad Bunny|Bomba Estéreo                                  |2306        |
+|spotify:track:3V8UKqhEK5zBkBb6d6ub8i|Te Boté - Remix                                                        |Nio Garcia|Casper Magico|Bad Bunny|Darell|Ozuna|Nicky Jam|2298        |
+|spotify:track:2qSkIjg1o9h3YT9RAgYN75|Espresso                                                               |Sabrina Carpenter                                        |2268        |
+|spotify:track:4wJ5Qq0jBN4ajy7ouZIV1c|APT.                                                                   |ROSÉ|Bruno Mars                                          |2228        |
+|spotify:track:2TH65lNHgvLxCKXM3apjxI|Callaita                                                               |Bad Bunny|Tainy                                          |2211        |
+|spotify:track:0fea68AdmYNygeTGI4RC18|LA CANCIÓN                                                             |J Balvin|Bad Bunny                                       |2211        |
+|spotify:track:7iQXYTyuG13aoeHxGG28Nh|PERRO NEGRO                                                            |Bad Bunny|Feid                                           |2200        |
+|spotify:track:2EjXfH91m7f8HiJN1yQg97|Rockin' Around The Christmas Tree                                      |Brenda Lee                                               |2200        |
+|spotify:track:67BtfxlNbhBmCDR2L2l8qd|MONTERO (Call Me By Your Name)                                         |Lil Nas X                                                |2197        |
+|spotify:track:2VxeLyX666F8uXCJ0dZF8B|Shallow                                                                |Lady Gaga|Bradley Cooper                                 |2145        |
+|spotify:track:6XjDF6nds4DE2BBbagZol6|Gata Only                                                              |FloyyMenor|Cris MJ                                       |2141        |
+|spotify:track:39N9RPD9MRb5WmoLzNzPeA|X                                                                      |Nicky Jam|J Balvin                                       |2141        |
+|spotify:track:6RUKPb4LETWmmr3iAEQktW|Something Just Like This                                               |The Chainsmokers|Coldplay                                |2132        |
+|spotify:track:2rPE9A1vEgShuZxxzR2tZH|thank u, next                                                          |Ariana Grande                                            |2131        |
+|spotify:track:1qbmS6ep2hbBRaEZFpn7BX|Man I Need                                                             |Olivia Dean                                              |2098        |
+|spotify:track:4ZtFanR9U6ndgddUvNcjcG|good 4 u                                                               |Olivia Rodrigo                                           |2092        |
+|spotify:track:2ekn2ttSfGqwhhate0LSR0|New Rules                                                              |Dua Lipa                                                 |2082        |
+|spotify:track:7hxHWCCAIIxFLCzvDgnQHX|Lemonade (feat. NAV)                                                   |Internet Money|Gunna|Don Toliver|NAV                     |2082        |
+|spotify:track:1Qrg8KqiBpW07V7PNxwwwL|Kill Bill                                                              |SZA                                                      |2078        |
+|spotify:track:0sf12qNH5qcw8qpgymFOqD|Blinding Lights                                                        |The Weeknd                                               |2073        |
+|spotify:track:3Wrjm47oTz2sjIgck11l5e|Beggin'                                                                |Måneskin                                                 |2065        |
+|spotify:track:1yoMvmasuxZfqHEipJhRbp|Hawái                                                                  |Maluma                                                   |2054        |
+|spotify:track:0yLdNVWF3Srea0uzk55zFn|Flowers                                                                |Miley Cyrus                                              |2050        |
+|spotify:track:3qhlB30KknSejmIvZZLjOD|End of Beginning                                                       |Djo                                                      |2025        |
+|spotify:track:3DXncPQOG4VBw3QHh3S817|I'm the One (feat. Justin Bieber, Quavo, Chance the Rapper & Lil Wayne)|DJ Khaled|Justin Bieber|Quavo|Chance the Rapper|Lil Wayne|2022        |
+|spotify:track:7ABLbnD53cQK00mhcaOUVG|LALA                                                                   |Myke Towers                                              |2016        |
+|spotify:track:3HVWdVOQ0ZA45FuZGSfvns|I Don't Care (with Justin Bieber)                                      |Ed Sheeran & Justin Bieber|Justin Bieber                 |2012        |
+|spotify:track:2XIc1pqjXV3Cr2BQUGNBck|LA NOCHE DE ANOCHE                                                     |Bad Bunny|ROSALÍA                                        |2012        |
+|spotify:track:7k4t7uLgtOxPwTpFmtJNTY|Tusa                                                                   |KAROL G|Nicki Minaj                                      |2009        |
+|spotify:track:0qYTZCo5Bwh1nsUFGZP3zn|Felices los 4                                                          |Maluma                                                   |1998        |
+|spotify:track:4iJyoBOLtHqaGxP12qzhQI|Peaches (feat. Daniel Caesar & Giveon)                                 |Justin Bieber|Daniel Caesar|GIVĒON                       |1995        |
+|spotify:track:5iwz1NiezX7WWjnCgY5TH4|Calma - Remix                                                          |Pedro Capó|Farruko                                       |1978        |
+|spotify:track:6u7jPi22kF8CTQ3rb9DHE7|Old Town Road (feat. Billy Ray Cyrus) - Remix                          |Lil Nas X|Billy Ray Cyrus                                |1976        |
+|spotify:track:4LRPiXqCikLlN15c3yImP7|As It Was                                                              |Harry Styles                                             |1966        |
+|spotify:track:116H0KvKr2Zl4RPuVBruDO|MIA                                                                    |Bad Bunny|Drake                                          |1964        |
+|spotify:track:33bnxcjePIkcmNjEFTJX0l|Déjala Que Vuelva (feat. Manuel Turizo)                                |Piso 21|Manuel Turizo                                    |1963        |
+|spotify:track:7x9aauaA9cu6tyfpHnqDLo|Seven (feat. Latto)                                                    |Jung Kook|Latto                                          |1952        |
+|spotify:track:1xK1Gg9SxG8fy2Ya373oqb|Bandido                                                                |Myke Towers|Juhn                                         |1951        |
+|spotify:track:3eR23VReFzcdmS7TYCrhCe|It Ain't Me (with Selena Gomez)                                        |Kygo|Selena Gomez                                        |1945        |
+|spotify:track:7ef4DlsgrMEH11cDZd32M6|One Kiss (with Dua Lipa)                                               |Calvin Harris|Dua Lipa                                   |1895        |
+|spotify:track:7vrJn5hDSXRmdXoR30KgF1|BICHOTA                                                                |KAROL G                                                  |1864        |
+|spotify:track:2G7V7zsVDxg1yRsu7Ew9RJ|In My Feelings                                                         |Drake                                                    |1863        |
+|spotify:track:3NdDpSvN911VPGivFlV5d0|I Don’t Wanna Live Forever (Fifty Shades Darker)                       |ZAYN|Taylor Swift                                        |1854        |
+|spotify:track:5Z9KJZvQzH6PFmb8SNkxuk|INDUSTRY BABY (feat. Jack Harlow)                                      |Lil Nas X|Jack Harlow                                    |1833        |
+|spotify:track:3VT8hOC5vuDXBsHrR53WFh|Astronaut In The Ocean                                                 |Masked Wolf                                              |1812        |
+|spotify:track:4HYDUMY0xSpeBr0AMY9cUz|La Curiosidad                                                          |Jay Wheeler|DJ Nelson|Myke Towers                        |1793        |
+|spotify:track:2GxrNKugF82CnoRFbQfzPf|i like the way you kiss me                                             |Artemas                                                  |1776        |
+|spotify:track:6ocbgoVGwYJhOv1GgI9NsF|7 rings                                                                |Ariana Grande                                            |1768        |
+|spotify:track:5p7ujcrUXASCNwRaWNHR1C|Without Me                                                             |Halsey                                                   |1767        |
+|spotify:track:1xQ6trAsedVPCdbtDAmk0c|Savage Love (Laxed - Siren Beat)                                       |Jawsh 685|Jason Derulo                                   |1755        |
+|spotify:track:5w9c2J52mkdntKOmRLeM2m|Con Calma                                                              |Daddy Yankee|Snow                                        |1748        |
++------------------------------------+-----------------------------------------------------------------------+---------------------------------------------------------+------------+
+only showing top 100 rows
+
+>>> from pyspark.sql.functions import col, count
+...
+... top5_50days = (
+...     df
+...     .filter(col("rank") = 1)
+...     .groupBy("uri", "track_name", "artist_names")
+...     .agg(count("*").alias("days_in_top5"))
+...     .filter(col("days_in_top5") >= 50)
+...     .orderBy(col("days_in_top5").desc())
+... )
+...
+... top5_50days.show(100, truncate=False)
+...
+  File "<python-input-36>", line 5
+    .filter(col("rank") = 1)
+            ^^^^^^^^^^^^^
+SyntaxError: expression cannot contain assignment, perhaps you meant "=="?
+>>> from pyspark.sql.functions import col, count
+...
+... top5_50days = (
+...     df
+...     .filter(col("rank") == 1)
+...     .groupBy("uri", "track_name", "artist_names")
+...     .agg(count("*").alias("days_in_top5"))
+...     .filter(col("days_in_top5") >= 50)
+...     .orderBy(col("days_in_top5").desc())
+... )
+...
+... top5_50days.show(100, truncate=False)
+...
++------------------------------------+-------------------------------------------------+---------------------------------------------------------+------------+
+|uri                                 |track_name                                       |artist_names                                             |days_in_top5|
++------------------------------------+-------------------------------------------------+---------------------------------------------------------+------------+
+|spotify:track:7qiZfU4dY1lWllzX7mPBI3|Shape of You                                     |Ed Sheeran                                               |3857        |
+|spotify:track:7tI8dRuH2Yc6RuoTjxo4dU|Who                                              |Jimin                                                    |3098        |
+|spotify:track:1rgnBhdG2JDFTbYkYRZAku|Dance Monkey                                     |Tones And I                                              |2751        |
+|spotify:track:5CtI0qwDJkDQGwXD1H1cLb|Despacito - Remix                                |Luis Fonsi|Daddy Yankee|Justin Bieber                    |2499        |
+|spotify:track:5PjdY0CKGZdEuoNab3yDmX|STAY (with Justin Bieber)                        |The Kid LAROI|Justin Bieber                              |1854        |
+|spotify:track:6iOndD4OFo7GkaDypWQIou|La Plena - W Sound 05                            |W Sound|Beéle|Ovy On The Drums                           |1810        |
+|spotify:track:0bYg9bo50gSsH3LtXe2SQn|All I Want for Christmas Is You                  |Mariah Carey                                             |1725        |
+|spotify:track:7wGoVu4Dady5GV0Sv4UIsx|rockstar (feat. 21 Savage)                       |Post Malone|21 Savage                                    |1635        |
+|spotify:track:4aWmUDTfIPGksMNLV2rQP2|Despacito                                        |Luis Fonsi|Daddy Yankee                                  |1566        |
+|spotify:track:6v3KW9xbzN5yKLt9YKDYA2|Señorita                                         |Shawn Mendes|Camila Cabello                              |1548        |
+|spotify:track:7k4t7uLgtOxPwTpFmtJNTY|Tusa                                             |KAROL G|Nicki Minaj                                      |1511        |
+|spotify:track:27xkOIER6uDLKALIelHylZ|Don’t Say You Love Me                            |Jin                                                      |1476        |
+|spotify:track:2XW4DbS6NddZxRPm5rMCeY|God's Plan                                       |Drake                                                    |1363        |
+|spotify:track:2rb5MvYT7ZIxbKW5hfcHx8|Mi Gente                                         |J Balvin|Willy William                                   |1301        |
+|spotify:track:4MzXwWMhyBbmu6hOcLVD49|DÁKITI                                           |Bad Bunny|JHAYCO                                         |1299        |
+|spotify:track:3V8UKqhEK5zBkBb6d6ub8i|Te Boté - Remix                                  |Nio Garcia|Casper Magico|Bad Bunny|Darell|Ozuna|Nicky Jam|1288        |
+|spotify:track:2JPLbjOn0wPCngEot2STUS|Yonaguni                                         |Bad Bunny                                                |1278        |
+|spotify:track:2ksOAxtIxY8yElEWw8RhgK|China                                            |Anuel AA|Daddy Yankee|KAROL G|J Balvin|Ozuna             |1269        |
+|spotify:track:7lPN2DXiMsVn7XUKtOW1CS|drivers license                                  |Olivia Rodrigo                                           |1251        |
+|spotify:track:0TK2YIli7K1leLovkQiNik|Señorita                                         |Shawn Mendes|Camila Cabello                              |1189        |
+|spotify:track:1yoMvmasuxZfqHEipJhRbp|Hawái                                            |Maluma                                                   |1179        |
+|spotify:track:2tTmW7RDtMQtBk7m2rYeSw|Quevedo: Bzrp Music Sessions, Vol. 52/66         |Bizarrap|Quevedo                                         |1131        |
+|spotify:track:4gzsuuZypVbxs0Af1LSZyB|Lo Siento BB:/ (with Bad Bunny & Julieta Venegas)|Tainy|Bad Bunny|Julieta Venegas                          |1102        |
+|spotify:track:0yLdNVWF3Srea0uzk55zFn|Flowers                                          |Miley Cyrus                                              |1072        |
+|spotify:track:2HRgqmZQC0MC7GeNuDIXHN|Seven (feat. Latto) (Explicit Ver.)              |Jung Kook|Latto                                          |1069        |
+|spotify:track:7bywjHOc0wSjGGbj04XbVi|LUNA                                             |Feid|ATL Jacob                                           |1062        |
+|spotify:track:2RkZ5LkEzeHGRsmDqKwmaJ|Ordinary                                         |Alex Warren                                              |1056        |
+|spotify:track:5ww2BF9slyYgNOk37BlC4u|La Bachata                                       |Manuel Turizo                                            |1046        |
+|spotify:track:7x9aauaA9cu6tyfpHnqDLo|Seven (feat. Latto)                              |Jung Kook|Latto                                          |1037        |
+|spotify:track:2Fxmhks0bxGSBdJ92vM42m|bad guy                                          |Billie Eilish                                            |1035        |
+|spotify:track:3tjFYV6RSFtuktYl3ZtYcq|Mood (feat. iann dior)                           |24kGoldn|iann dior                                       |1027        |
+|spotify:track:1Ej96GIBCTvgH7tNX1r3qr|Otro Trago                                       |Sech|Darell                                              |927         |
+|spotify:track:2plbrEY59IikOBgBGLjaoe|Die With A Smile                                 |Lady Gaga|Bruno Mars                                     |910         |
+|spotify:track:7ytR5pFWmSjzHJIeQkgog4|ROCKSTAR (feat. Roddy Ricch)                     |DaBaby|Roddy Ricch                                       |905         |
+|spotify:track:0qYTZCo5Bwh1nsUFGZP3zn|Felices los 4                                    |Maluma                                                   |905         |
+|spotify:track:7ABLbnD53cQK00mhcaOUVG|LALA                                             |Myke Towers                                              |902         |
+|spotify:track:4LRPiXqCikLlN15c3yImP7|As It Was                                        |Harry Styles                                             |902         |
+|spotify:track:2rPE9A1vEgShuZxxzR2tZH|thank u, next                                    |Ariana Grande                                            |882         |
+|spotify:track:2FRnf9qhLbvw8fu4IBXx78|Last Christmas                                   |Wham!                                                    |879         |
+|spotify:track:53iuhJlwXhSER5J2IYYv1W|The Fate of Ophelia                              |Taylor Swift                                             |869         |
+|spotify:track:2G7V7zsVDxg1yRsu7Ew9RJ|In My Feelings                                   |Drake                                                    |832         |
+|spotify:track:3sK8wGT43QFpWrvNQsrQya|DtMF                                             |Bad Bunny                                                |817         |
+|spotify:track:6Sq7ltF9Qa7SNFBsV5Cogx|Me Porto Bonito                                  |Bad Bunny|Chencho Corleone                               |804         |
+|spotify:track:0VjIjW4GlUZAMYd2vXMi3b|Blinding Lights                                  |The Weeknd                                               |780         |
+|spotify:track:02MWAaffLxlfxAUY7c5dvx|Heat Waves                                       |Glass Animals                                            |778         |
+|spotify:track:39N9RPD9MRb5WmoLzNzPeA|X                                                |Nicky Jam|J Balvin                                       |768         |
+|spotify:track:6ocbgoVGwYJhOv1GgI9NsF|7 rings                                          |Ariana Grande                                            |734         |
+|spotify:track:68lbSrXDORS51pmyjZv712|SWIM                                             |BTS                                                      |721         |
+|spotify:track:3nqQXoyQOWXiESFLlDF1hG|Unholy (feat. Kim Petras)                        |Sam Smith|Kim Petras                                     |710         |
+|spotify:track:6WatFBLVB0x077xWeoVc2k|Si Antes Te Hubiera Conocido                     |KAROL G                                                  |709         |
+|spotify:track:4ZtFanR9U6ndgddUvNcjcG|good 4 u                                         |Olivia Rodrigo                                           |702         |
+|spotify:track:1CPZ5BxNNd0n0nF4Orb9JS|Golden                                           |HUNTR/X|EJAE|AUDREY NUNA|REI AMI|KPop Demon Hunters Cast |700         |
+|spotify:track:67BtfxlNbhBmCDR2L2l8qd|MONTERO (Call Me By Your Name)                   |Lil Nas X                                                |672         |
+|spotify:track:1qbmS6ep2hbBRaEZFpn7BX|Man I Need                                       |Olivia Dean                                              |672         |
+|spotify:track:4w8niZpiMy6qz1mntFA5uM|Taki Taki (with Selena Gomez, Ozuna & Cardi B)   |DJ Snake|Selena Gomez|Ozuna|Cardi B                      |671         |
+|spotify:track:0nbXyq5TXYPCO7pr3N8S4I|The Box                                          |Roddy Ricch                                              |666         |
+|spotify:track:0E9ZjEAyAwOXZ7wJC0PD33|In My Mind                                       |Dynoro|Gigi D'Agostino                                   |656         |
+|spotify:track:4Dvkj6JhhA12EX05fT7y2e|As It Was                                        |Harry Styles                                             |639         |
+|spotify:track:0gplL1WMoJ6iYaPgMCL0gX|Easy On Me                                       |Adele                                                    |637         |
+|spotify:track:6pD0ufEQq0xdHSsRbg9LBK|un x100to                                        |Grupo Frontera|Bad Bunny                                 |620         |
+|spotify:track:2DEZmgHKAvm41k4J3R2E9Y|Safaera                                          |Bad Bunny|Jowell & Randy|Ñengo Flow                      |615         |
+|spotify:track:14msK75pk3pA33pzPVNtBF|7 rings                                          |Ariana Grande                                            |614         |
+|spotify:track:2lTm559tuIvatlT1u0JYG2|BAILE INoLVIDABLE                                |Bad Bunny                                                |601         |
+|spotify:track:7G7mSV4BebkoHWwKTDvXu9|Winter Ahead (with PARK HYO SHIN)                |V|Park Hyo Shin                                          |593         |
+|spotify:track:5iwz1NiezX7WWjnCgY5TH4|Calma - Remix                                    |Pedro Capó|Farruko                                       |592         |
+|spotify:track:5w9c2J52mkdntKOmRLeM2m|Con Calma                                        |Daddy Yankee|Snow                                        |588         |
+|spotify:track:2GxrNKugF82CnoRFbQfzPf|i like the way you kiss me                       |Artemas                                                  |587         |
+|spotify:track:3HVWdVOQ0ZA45FuZGSfvns|I Don't Care (with Justin Bieber)                |Ed Sheeran & Justin Bieber|Justin Bieber                 |584         |
+|spotify:track:0sf12qNH5qcw8qpgymFOqD|Blinding Lights                                  |The Weeknd                                               |580         |
+|spotify:track:7Bk0uXKk1uPT0XuQbpFzvs|Fiel                                             |Los Legendarios|Wisin|JHAYCO                             |558         |
+|spotify:track:7ef4DlsgrMEH11cDZd32M6|One Kiss (with Dua Lipa)                         |Calvin Harris|Dua Lipa                                   |557         |
+|spotify:track:1OmcAT5Y8eg5bUPv9qJT4R|rockstar (feat. 21 Savage)                       |Post Malone|21 Savage                                    |539         |
+|spotify:track:1xK1Gg9SxG8fy2Ya373oqb|Bandido                                          |Myke Towers|Juhn                                         |531         |
+|spotify:track:2VxeLyX666F8uXCJ0dZF8B|Shallow                                          |Lady Gaga|Bradley Cooper                                 |526         |
+|spotify:track:0R6NfOiLzLj4O5VbYSJAjf|La Diabla                                        |Xavi                                                     |514         |
+|spotify:track:7iQXYTyuG13aoeHxGG28Nh|PERRO NEGRO                                      |Bad Bunny|Feid                                           |511         |
+|spotify:track:3Ua0m0YmEjrMi9XErKcNiR|Like Crazy                                       |Jimin                                                    |497         |
+|spotify:track:75FEaRjZTKLhTrFGsfMUXR|Running Up That Hill (A Deal With God)           |Kate Bush                                                |490         |
+|spotify:track:3Wrjm47oTz2sjIgck11l5e|Beggin'                                          |Måneskin                                                 |489         |
+|spotify:track:0DWdj2oZMBFSzRsi2Cvfzf|TQG                                              |KAROL G|Shakira                                          |484         |
+|spotify:track:4iJyoBOLtHqaGxP12qzhQI|Peaches (feat. Daniel Caesar & Giveon)           |Justin Bieber|Daniel Caesar|GIVĒON                       |474         |
+|spotify:track:47EiUVwUp4C9fGccaPuUCS|DÁKITI                                           |Bad Bunny|JHAYCO                                         |470         |
+|spotify:track:4Oun2ylbjFKMPTiaSbbCih|WAP (feat. Megan Thee Stallion)                  |Cardi B|Megan Thee Stallion                              |469         |
+|spotify:track:1Qrg8KqiBpW07V7PNxwwwL|Kill Bill                                        |SZA                                                      |464         |
+|spotify:track:6FyRXC8tJUh863JCkyWqtk|Adan y Eva                                       |Paulo Londra                                             |462         |
+|spotify:track:4uUG5RXrOk84mYEfFvj3cK|I'm Good (Blue)                                  |David Guetta|Bebe Rexha                                  |459         |
+|spotify:track:2FDTHlrBguDzQkp7PVj16Q|Sprinter                                         |Dave|Central Cee                                         |455         |
+|spotify:track:6tNQ70jh4OwmPGpYy6R2o9|Beautiful Things                                 |Benson Boone                                             |453         |
+|spotify:track:116H0KvKr2Zl4RPuVBruDO|MIA                                              |Bad Bunny|Drake                                          |442         |
+|spotify:track:2IGMVunIBsBLtEQyoI1Mu7|Paint The Town Red                               |Doja Cat                                                 |432         |
+|spotify:track:2HafqoJbgXdtjwCOvNEF14|Si No Estás                                      |Íñigo Quintero                                           |415         |
+|spotify:track:33bnxcjePIkcmNjEFTJX0l|Déjala Que Vuelva (feat. Manuel Turizo)          |Piso 21|Manuel Turizo                                    |414         |
+|spotify:track:3VT8hOC5vuDXBsHrR53WFh|Astronaut In The Ocean                           |Masked Wolf                                              |403         |
+|spotify:track:2b8fOow8UzyDFAE27YhOZM|Memories                                         |Maroon 5                                                 |401         |
+|spotify:track:4FAKtPVycI4DxoOHC01YqD|Yandel 150                                       |Yandel|Feid                                              |389         |
+|spotify:track:5hcisvFMidkMJlElTO9Qmw|Sensualidad                                      |Bad Bunny|Prince Royce|J Balvin|Mambo Kingz|DJ Luian     |387         |
+|spotify:track:7ne4VBA60CxGM75vw0EYad|That’s So True                                   |Gracie Abrams                                            |382         |
+|spotify:track:2TH65lNHgvLxCKXM3apjxI|Callaita                                         |Bad Bunny|Tainy                                          |378         |
+|spotify:track:46IZ0fSY2mpAiktS3KOqds|Easy On Me                                       |Adele                                                    |377         |
+|spotify:track:24Yi9hE78yPEbZ4kxyoXAI|Roses - Imanbek Remix                            |SAINt JHN|Imanbek                                        |376         |
++------------------------------------+-------------------------------------------------+---------------------------------------------------------+------------+
+only showing top 100 rows
+>>> from pyspark.sql.functions import col, substring, countDistinct
+...
+... yearly_song_trend = (
+...     df
+...     .filter(
+...         col("release_date").isNotNull() &
+...         (col("release_date") != "")
+...     )
+...     .withColumn("year", substring("release_date", 1, 4))
+...     .groupBy("year")
+...     .agg(countDistinct("uri").alias("songs_released"))
+...     .orderBy("year")
+... )
+...
+... yearly_song_trend.show(100, truncate=False)
+...
++----+--------------+
+|year|songs_released|
++----+--------------+
+|1840|1             |
+|1850|1             |
+|1870|2             |
+|1894|1             |
+|1900|6             |
+|1903|1             |
+|1905|2             |
+|1920|3             |
+|1929|1             |
+|1930|4             |
+|1931|2             |
+|1934|1             |
+|1939|1             |
+|1942|2             |
+|1943|1             |
+|1944|4             |
+|1945|14            |
+|1948|3             |
+|1949|5             |
+|1950|1             |
+|1951|1             |
+|1953|1             |
+|1954|5             |
+|1955|1             |
+|1956|3             |
+|1957|13            |
+|1958|5             |
+|1959|10            |
+|1960|21            |
+|1961|7             |
+|1962|28            |
+|1963|17            |
+|1964|25            |
+|1965|29            |
+|1966|25            |
+|1967|37            |
+|1968|31            |
+|1969|38            |
+|1970|45            |
+|1971|59            |
+|1972|37            |
+|1973|103           |
+|1974|32            |
+|1975|66            |
+|1976|59            |
+|1977|89            |
+|1978|89            |
+|1979|71            |
+|1980|85            |
+|1981|111           |
+|1982|96            |
+|1983|92            |
+|1984|115           |
+|1985|122           |
+|1986|128           |
+|1987|165           |
+|1988|109           |
+|1989|128           |
+|1990|184           |
+|1991|182           |
+|1992|162           |
+|1993|196           |
+|1994|290           |
+|1995|247           |
+|1996|319           |
+|1997|346           |
+|1998|419           |
+|1999|433           |
+|2000|471           |
+|2001|470           |
+|2002|472           |
+|2003|506           |
+|2004|563           |
+|2005|693           |
+|2006|803           |
+|2007|800           |
+|2008|770           |
+|2009|776           |
+|2010|985           |
+|2011|992           |
+|2012|1130          |
+|2013|1350          |
+|2014|1603          |
+|2015|2348          |
+|2016|4232          |
+|2017|14569         |
+|2018|19156         |
+|2019|22014         |
+|2020|24836         |
+|2021|26103         |
+|2022|25363         |
+|2023|25328         |
+|2024|24421         |
+|2025|24175         |
+|2026|9023          |
++----+--------------+
+
+>>> numeric_cols = [
+...     "rank",
+...     "peak_rank",
+...     "previous_rank",
+...     "days_on_chart",
+...     "streams",
+...     "consecutive_days",
+...     "entry_rank"
+... ]
+...
+... df.select(numeric_cols).describe().show()
+...
+26/07/18 14:07:05 WARN SparkStringUtils: Truncated the string representation of a plan since it was too large. This behavior can be adjusted by setting 'spark.sql.debug.maxToStringFields'.
++-------+------------------+------------------+-----------------+-----------------+----------------+------------------+------------------+
+|summary|              rank|         peak_rank|    previous_rank|    days_on_chart|         streams|  consecutive_days|        entry_rank|
++-------+------------------+------------------+-----------------+-----------------+----------------+------------------+------------------+
+|  count|          42869655|          42869655|         42869655|         42869655|        42869655|          42869655|          42869655|
+|   mean| 98.18755662950868| 34.42558149814828|87.21479288788305|266.7093040053623|67841.5879753406|129.23524989879203|102.56600677098987|
+| stddev|57.728195360859324|39.404863143092484|58.59436462116603|359.6162436801907|243998.081122721|206.97278739269382| 70.08492594509025|
+|    min|                 1|                 1|               -1|                1|            1001|                 1|                 1|
+|    max|               200|               200|              200|             3435|        30987370|              3435|               200|
++-------+------------------+------------------+-----------------+-----------------+----------------+------------------+------------------+
+
+>>> from pyspark.sql.functions import col
+...
+... Q1, Q3 = df.approxQuantile("streams", [0.25, 0.75], 0.01)
+...
+... IQR = Q3 - Q1
+...
+... lower = Q1 - 1.5 * IQR
+... upper = Q3 + 1.5 * IQR
+...
+... print("Q1 :", Q1)
+... print("Q3 :", Q3)
+... print("IQR:", IQR)
+... print("Lower Bound:", lower)
+... print("Upper Bound:", upper)
+...
+Q1 : 4756.0
+Q3 : 44433.0
+IQR: 39677.0
+Lower Bound: -54759.5
+Upper Bound: 103948.5
+>>> outlier_count = df.filter(
+...     (col("streams") < lower) |
+...     (col("streams") > upper)
+... ).count()
+...
+... print("Number of Outliers:", outlier_count)
+...
+Number of Outliers: 5103515
+>>> from pyspark.sql.functions import col
+...
+... numeric_cols = [
+...     "streams",
+...     "days_on_chart",
+...     "consecutive_days"
+... ]
+...
+... for column in numeric_cols:
+...
+...     Q1, Q3 = df.approxQuantile(column, [0.25, 0.75], 0.01)
+...
+...     IQR = Q3 - Q1
+...
+...     lower = Q1 - 1.5 * IQR
+...     upper = Q3 + 1.5 * IQR
+...
+...     outliers = df.filter(
+...         (col(column) < lower) |
+...         (col(column) > upper)
+...     ).count()
+...
+...     print("=" * 50)
+...     print("Column :", column)
+...     print("Outliers :", outliers)
+...
+==================================================
+Column : streams
+Outliers : 5103515
+==================================================
+Column : days_on_chart
+Outliers : 3507649
+==================================================
+Column : consecutive_days
+Outliers : 3396298
