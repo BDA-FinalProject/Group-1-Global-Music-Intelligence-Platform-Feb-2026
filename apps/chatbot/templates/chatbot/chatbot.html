@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}RAG Chatbot{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'chatbot/css/chatbot.css' %}">
+{% endblock %}
+
+{% block content %}
+<section class="page-section page-hero pb-0">
+  <div class="container reveal">
+    {% include 'partials/section_header.html' with eyebrow="Ask the Pipeline" title="RAG Chatbot" subtitle="Ask questions about the data pipeline. Running in demo mode with placeholder replies until the RAG backend is connected." align="text-start" %}
+  </div>
+</section>
+
+<section class="page-section pt-0">
+  <div class="container reveal">
+    <div class="chat-window">
+      <div class="chat-header">
+        <div class="chat-header-avatar"><i class="bi bi-robot"></i></div>
+        <div>
+          <h6 class="mb-0">Pipeline Assistant</h6>
+          <span class="chat-status"><span class="chat-status-dot"></span>Demo mode</span>
+        </div>
+      </div>
+
+      <div class="chat-messages" id="chatMessages">
+        <div class="chat-message chat-message-bot">
+          <div class="chat-bubble">
+            Hi! I'm the pipeline assistant. Ask me anything about the data pipeline — I'm currently
+            answering with placeholder replies until the RAG backend is connected.
+          </div>
+        </div>
+      </div>
+
+      <form class="chat-input-bar" id="chatForm">
+        <input type="hidden" id="csrfTokenInput" value="{{ csrf_token }}">
+        <input type="text" class="form-control" id="chatInput" placeholder="Ask a question about the pipeline…" autocomplete="off" required>
+        <button type="submit" class="btn btn-primary chat-send-btn" aria-label="Send message">
+          <i class="bi bi-send-fill"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'chatbot/js/chatbot.js' %}"></script>
+{% endblock %}

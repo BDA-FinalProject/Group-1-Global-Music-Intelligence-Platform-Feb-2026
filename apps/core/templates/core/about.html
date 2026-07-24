@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+
+{% block title %}About Project{% endblock %}
+
+{% block content %}
+{% url 'team:index' as team_url %}
+
+<section class="page-section page-hero">
+  <div class="container">
+    {% include 'partials/section_header.html' with eyebrow="About" title="About the Project" align="text-start" %}
+    <p class="section-subtitle" style="max-width: 48rem;">
+      This project was built by a group of CDAC Big Data Engineering students to demonstrate how raw data
+      can be ingested, transformed, and served through a modern pipeline — and made accessible through both
+      a live dashboard and a conversational, RAG-powered chatbot. This site launches ahead of the pipeline's
+      real data becoming available, using placeholder data everywhere so the same structure can later be
+      pointed at live results without a redesign.
+    </p>
+  </div>
+</section>
+
+<section class="page-section page-section-alt">
+  <div class="container">
+    {% include 'partials/section_header.html' with title="Objectives" align="text-start" %}
+    <div class="row g-4">
+      <div class="col-md-6 col-lg-3">
+        {% include 'partials/card.html' with icon="bi-bullseye" title="Reliable Ingestion" text="Capture raw data from multiple sources without loss or duplication." %}
+      </div>
+      <div class="col-md-6 col-lg-3">
+        {% include 'partials/card.html' with icon="bi-shield-check" title="Data Quality" text="Progressive cleaning and validation across Bronze, Silver, and Gold layers." %}
+      </div>
+      <div class="col-md-6 col-lg-3">
+        {% include 'partials/card.html' with icon="bi-speedometer2" title="Actionable Insight" text="Serve business-ready metrics through an interactive dashboard." %}
+      </div>
+      <div class="col-md-6 col-lg-3">
+        {% include 'partials/card.html' with icon="bi-chat-square-text" title="Conversational Access" text="Let users ask natural-language questions of the underlying data." %}
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="page-section text-center">
+  <div class="container">
+    <p class="section-subtitle mx-auto mb-4">Curious who built this?</p>
+    {% include 'partials/button.html' with href=team_url label="Meet the Team" icon="bi-arrow-right" %}
+  </div>
+</section>
+{% endblock %}

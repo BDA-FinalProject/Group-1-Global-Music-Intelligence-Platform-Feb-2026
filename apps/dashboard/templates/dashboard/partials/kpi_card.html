@@ -1,0 +1,16 @@
+{% comment %}
+Reusable KPI card. Usage:
+  {% include 'dashboard/partials/kpi_card.html' with kpi=kpi %}
+`kpi` is a dict with: label, value, delta, trend ("up"/"down"), icon —
+the same shape returned by apps/dashboard/services.py::get_kpis() and
+served at GET /api/v1/dashboard/kpis/.
+{% endcomment %}
+<div class="app-card kpi-card h-100">
+  <div class="kpi-card-icon"><i class="bi {{ kpi.icon }}"></i></div>
+  <p class="kpi-card-label">{{ kpi.label }}</p>
+  <p class="kpi-card-value">{{ kpi.value }}</p>
+  <span class="kpi-card-delta kpi-card-delta-{{ kpi.trend }}">
+    <i class="bi {% if kpi.trend == 'up' %}bi-arrow-up-short{% else %}bi-arrow-down-short{% endif %}"></i>
+    {{ kpi.delta }}
+  </span>
+</div>

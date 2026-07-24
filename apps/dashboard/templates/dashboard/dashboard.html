@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'dashboard/css/dashboard.css' %}">
+{% endblock %}
+
+{% block content %}
+<section class="page-section page-hero">
+  <div class="container reveal">
+    {% include 'partials/section_header.html' with eyebrow="Live Metrics" title="Dashboard" subtitle="KPIs and charts are currently backed by placeholder data served from the API layer — pointing them at real Gold-layer data later requires no frontend changes." align="text-start" %}
+  </div>
+</section>
+
+<section class="page-section pt-0">
+  <div class="container reveal">
+    <form class="dashboard-filters row g-3 align-items-end mb-4" id="dashboardFilters">
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label" for="filterRange">Date Range</label>
+        <select class="form-select" id="filterRange" name="range">
+          {% for opt in filters.date_ranges %}
+            <option value="{{ opt.value }}">{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label" for="filterLayer">Layer</label>
+        <select class="form-select" id="filterLayer" name="layer">
+          {% for opt in filters.layers %}
+            <option value="{{ opt.value }}">{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label" for="filterSource">Data Source</label>
+        <select class="form-select" id="filterSource" name="source">
+          {% for opt in filters.sources %}
+            <option value="{{ opt.value }}">{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-primary w-100">Apply Filters</button>
+      </div>
+    </form>
+
+    <div class="row g-4 mb-5">
+      {% for kpi in kpis %}
+        <div class="col-sm-6 col-lg-3">
+          {% include 'dashboard/partials/kpi_card.html' with kpi=kpi %}
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-7">
+        <div class="app-card chart-card">
+          <h5 class="app-card-title mb-3">Records Processed Over Time</h5>
+          <canvas id="chart-processed-over-time" data-chart-key="processed-over-time"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-5">
+        <div class="app-card chart-card">
+          <h5 class="app-card-title mb-3">Records by Layer</h5>
+          <canvas id="chart-layer-distribution" data-chart-key="layer-distribution"></canvas>
+        </div>
+      </div>
+      <div class="col-12">
+        <div class="app-card chart-card">
+          <h5 class="app-card-title mb-3">Pipeline Runs by Stage</h5>
+          <canvas id="chart-pipeline-status" data-chart-key="pipeline-status"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="{% static 'dashboard/js/dashboard.js' %}"></script>
+{% endblock %}
