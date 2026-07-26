@@ -79,26 +79,5 @@ Inspected existing conventions: `services.py` (dummy data, single integration po
 - `apps/api/v1/urls.py` — swap `KPIListView`/`ChartDataView` imports for `gold_data.api` views (or add alongside)
 - `apps/dashboard/services.py` — either delete once `gold_data` fully replaces it, or keep as offline-demo fallback
 
-## 6. Branding Audit
 
-"DataPipeline Platform" appears in exactly 3 files:
-- `templates/partials/navbar.html` (nav brand)
-- `templates/partials/footer.html` (footer heading + copyright line)
-- `templates/base.html` (`<title>` suffix: "Big Data Pipeline Platform")
 
-**Name alternatives** (Spotify-analytics-flavored):
-1. **Wavelength** — evokes audio waveform + data trends, short, brandable
-2. **StreamPulse** — "stream" (Spotify) + "pulse" (live analytics/heartbeat)
-3. **Cadence Analytics** — musical term (rhythm/tempo) doubling as "regular data cadence"
-4. **Resonance** — music term, implies impact/reach (matches "reach X countries" metric)
-5. **Chartline** — pun on Billboard "charts" + data "line" charts
-
-No rename performed — pick one and I'll do the find-and-replace across the 3 files.
-
-## 7. Decisions Pending Your Go-Ahead
-
-1. **Postgres hosting**: local (free, `brew install postgresql@16 pgvector`) vs. RDS (billable, needs manual provisioning in AWS console — not done here). Local is the natural fit until the team is ready to share a real DB.
-2. **Embedding grain**: full monthly-grain chunks (~972K rows, ~5hr local batch) vs. reduced yearly-grain chunks (~25 min local). Recommend reduced grain.
-3. **Branding name**: pick one of the 5 above (or none — leave as "DataPipeline Platform").
-
-Nothing above 1–3 has been executed or finalized.
