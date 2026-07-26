@@ -8,3 +8,4 @@ media/
 logs/*.log
 .DS_Store
 *.egg-info/
+.gold_local/

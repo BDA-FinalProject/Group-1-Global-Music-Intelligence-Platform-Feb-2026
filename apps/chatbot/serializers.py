@@ -8,3 +8,4 @@ class ChatMessageRequestSerializer(serializers.Serializer):
 
 class ChatMessageResponseSerializer(serializers.Serializer):
     reply = serializers.CharField()
+    sources = serializers.ListField(child=serializers.CharField(), required=False)

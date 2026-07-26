@@ -1,14 +1,14 @@
 """
 Chat response service.
 
-get_bot_reply() is the single integration point for a real RAG/LLM
-backend. It currently returns a canned placeholder reply regardless of
-input, so the chat UI is fully interactive in demo mode. Replace its body
-with a real call to the retrieval-augmented pipeline (retrieve context
-from the Gold layer, then generate a grounded answer) when the backend is
-ready — apps/chatbot/api.py and the frontend don't need to change.
+get_bot_reply() calls the real RAG pipeline (apps.chatbot.rag) — retrieves
+grounded context from gold_chunks and generates an answer via a local
+Ollama model. Falls back to the canned demo reply if Ollama isn't running,
+so the chat UI stays interactive even without the local LLM up.
 """
 import random
+
+from . import rag
 
 _CANNED_REPLIES = [
     "That's a great question! Once the RAG pipeline is connected, I'll answer using real data from the Gold layer.",
@@ -18,5 +18,9 @@ _CANNED_REPLIES = [
 
 
 def get_bot_reply(user_message):
-    """STUB: returns a canned demo reply. Swap this for a real RAG/LLM call."""
-    return random.choice(_CANNED_REPLIES)
+    """Returns {'reply': str, 'sources': list[str]}. Falls back to the
+    canned demo reply (no sources) if the RAG pipeline / Ollama is down."""
+    try:
+        return rag.get_rag_reply(user_message)
+    except Exception:
+        return {'reply': random.choice(_CANNED_REPLIES), 'sources': []}

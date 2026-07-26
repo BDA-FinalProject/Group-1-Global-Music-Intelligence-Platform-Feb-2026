@@ -46,6 +46,7 @@ LOCAL_APPS = [
     'apps.core.apps.CoreConfig',
     'apps.dashboard.apps.DashboardConfig',
     'apps.chatbot.apps.ChatbotConfig',
+    'apps.gold_data.apps.GoldDataConfig',
     'apps.documentation.apps.DocumentationConfig',
     'apps.team.apps.TeamConfig',
     'apps.contact.apps.ContactConfig',
@@ -91,6 +92,10 @@ ASGI_APPLICATION = 'config.asgi.application'
 
 DATABASES = {
     'default': env.db('DATABASE_URL', default=f'sqlite:///{BASE_DIR / "db.sqlite3"}'),
+    # Read-only Gold-layer mart. apps.gold_data models are managed=False —
+    # schema.sql and scripts/load_gold_to_postgres.py own the schema/data,
+    # Django only queries it via .objects.using('gold').
+    'gold': env.db('GOLD_DATABASE_URL', default='postgres://localhost:5432/gold'),
 }
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -127,7 +132,7 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Big Data Pipeline Platform API',
+    'TITLE': 'StreamPulse API',
     'DESCRIPTION': (
         'API layer for the CDAC Big Data Engineering project. Endpoints '
         'currently return demo/placeholder data and are designed to be '

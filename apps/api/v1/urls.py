@@ -20,7 +20,8 @@ from drf_spectacular.views import (
 from rest_framework.routers import DefaultRouter
 
 from apps.chatbot.api import ChatMessageView
-from apps.dashboard.api import ChartDataView, FilterOptionsView, KPIListView
+from apps.dashboard.api import FilterOptionsView
+from apps.gold_data.api import GoldChartDataView, GoldKPIListView
 
 app_name = 'v1'
 
@@ -29,8 +30,13 @@ router = DefaultRouter()
 #   router.register('chatbot/conversations', ConversationViewSet, basename='chatbot-conversations')
 
 urlpatterns = router.urls + [
-    path('dashboard/kpis/', KPIListView.as_view(), name='dashboard-kpis'),
-    path('dashboard/charts/<str:chart_key>/', ChartDataView.as_view(), name='dashboard-chart'),
+    # Dashboard KPIs/charts are now served from the real Gold-layer data
+    # (apps.gold_data) rather than apps.dashboard.services' dummy data —
+    # apps.dashboard.api.KPIListView/ChartDataView are kept as an offline
+    # demo-mode fallback (same pattern as apps.chatbot's canned-reply stub)
+    # but are no longer routed here.
+    path('dashboard/kpis/', GoldKPIListView.as_view(), name='dashboard-kpis'),
+    path('dashboard/charts/<str:chart_key>/', GoldChartDataView.as_view(), name='dashboard-chart'),
     path('dashboard/filters/', FilterOptionsView.as_view(), name='dashboard-filters'),
     path('chatbot/messages/', ChatMessageView.as_view(), name='chatbot-messages'),
     path('schema/', SpectacularAPIView.as_view(), name='schema'),
