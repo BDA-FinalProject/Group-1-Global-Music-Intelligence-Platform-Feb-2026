@@ -84,7 +84,7 @@ spark.sparkContext.setLogLevel("WARN")
 # =============================================================================
 
 BRONZE_SONG_PATH = (
-    "s3://group-1-dbda/bronze/charts_songs_daily.parquet"
+     "s3://group-1-dbda/bronze/charts_songs_daily.parquet"
 )
 
 SILVER_SONG_PATH = (
@@ -160,6 +160,7 @@ COUNTRY_MAPPING = {
     "lt": "Lithuania",
     "lu": "Luxembourg",
     "lv": "Latvia",
+    "ma": "Morocco",
     "mx": "Mexico",
     "my": "Malaysia",
     "ng": "Nigeria",
@@ -187,7 +188,8 @@ COUNTRY_MAPPING = {
     "us": "United States",
     "uy": "Uruguay",
     "ve": "Venezuela",
-    "vn": "Vietnam"
+    "vn": "Vietnam",
+    "za": "South Africa"
 }
 
 # =============================================================================
@@ -704,4 +706,3 @@ if __name__ == "__main__":
         logger.info(
             "Spark Session Stopped."
         )
-
