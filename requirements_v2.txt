@@ -1,0 +1,11 @@
+boto3
+pandas
+pyarrow
+psycopg2-binary
+sentence-transformers
+qdrant-client
+python-dotenv
+tenacity
+pydantic
+tqdm
+requests

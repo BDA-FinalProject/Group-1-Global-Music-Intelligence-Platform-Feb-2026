@@ -1,0 +1,75 @@
+# Spotify RAG V2 Enhancement
+
+## Objective
+
+Enhance the existing Retrieval-Augmented Generation (RAG) pipeline by improving
+the data ingestion process, chunking strategy, embedding model, vector database,
+and retrieval mechanism while keeping compatibility with the existing Spotify
+Global Music Intelligence Platform.
+
+---
+
+## Existing Implementation
+
+- Gold Layer stored in Amazon S3
+- PostgreSQL + pgvector
+- all-MiniLM-L6-v2 embeddings
+- Fixed yearly chunking
+- Ollama LLM
+- Django chatbot
+
+---
+
+## Proposed Enhancements
+
+### Data Loader
+
+- Incremental loading
+- Batch processing
+- Validation checks
+- Better logging
+
+### Chunking
+
+- Parent-child chunk hierarchy
+- Metadata-aware chunk generation
+- Deterministic chunk IDs
+
+### Embeddings
+
+- Replace MiniLM with BAAI/bge-small-en-v1.5
+
+### Vector Database
+
+- Replace pgvector with Qdrant Cloud
+
+### Retrieval
+
+- Metadata filtering
+- Hybrid semantic retrieval
+
+### Generation
+
+- Qwen (planned)
+- Existing Django integration
+
+---
+
+## Folder Structure
+
+config/
+docs/
+rag/
+scripts/
+tests/
+
+---
+
+## Status
+
+- [ ] Enhanced Loader
+- [ ] Chunk Builder
+- [ ] Embedding Pipeline
+- [ ] Qdrant Integration
+- [ ] Retrieval Module
+- [ ] Generation Module

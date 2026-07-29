@@ -1,0 +1,28 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Model/cache files
+.cache/
+models/
+*.gguf
+
+# Generated data
+data/
+outputs/
+logs/
+*.log
+*.jsonl
+
+# OS files
+.DS_Store
+Thumbs.db
