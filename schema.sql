@@ -103,6 +103,14 @@ CREATE TABLE gold_chunks (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_gold_chunks_source ON gold_chunks (source_table, source_key);
--- ANN index -- build only after chunks are loaded, on the real row count.
--- CREATE INDEX idx_gold_chunks_embedding ON gold_chunks
---   USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- ANN index. Built once chunks were loaded, on the real row count
+-- (215,725 rows at build time) -- lists=216 follows pgvector's own
+-- rows/1000 guidance for tables under 1M rows.
+-- Opclass is vector_l2_ops, not vector_cosine_ops (as this line originally
+-- read commented-out): apps/chatbot/rag.py's retrieve_chunks() queries
+-- with the `<->` (L2 distance) operator, and an ivfflat index is only used
+-- by the planner when its opclass matches the operator in the query --
+-- vector_cosine_ops would have built an index the actual query could
+-- never use.
+CREATE INDEX idx_gold_chunks_embedding ON gold_chunks
+  USING ivfflat (embedding vector_l2_ops) WITH (lists = 216);
