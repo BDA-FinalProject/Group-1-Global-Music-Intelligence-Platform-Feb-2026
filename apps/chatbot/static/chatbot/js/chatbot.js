@@ -19,13 +19,50 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
-  function appendMessage(text, sender) {
+  // Formats a raw "sources" entry (e.g. "country_performance:India|2023" or
+  // "sql:country_performance:COUNT(DISTINCT country_name)") into a short
+  // chip label — sources are plain strings, not objects, so this just
+  // trims the table-name prefix and splits the trailing "|year" if present.
+  function formatSource(source) {
+    const parts = source.split(':');
+    const last = parts[parts.length - 1];
+    const [key, year] = last.split('|');
+    return year ? `${key} (${year})` : key;
+  }
+
+  function appendSources(wrapper, sources) {
+    if (!sources || sources.length === 0) return;
+    const sourcesRow = document.createElement('div');
+    sourcesRow.className = 'chat-sources';
+    sources.forEach((source) => {
+      const chip = document.createElement('span');
+      chip.className = 'chat-source-chip';
+      chip.textContent = formatSource(source);
+      sourcesRow.appendChild(chip);
+    });
+    wrapper.appendChild(sourcesRow);
+  }
+
+  function appendMessage(text, sender, sources) {
     const wrapper = document.createElement('div');
     wrapper.className = `chat-message chat-message-${sender}`;
+    // .chat-message is itself a flex row (for left/right alignment), so
+    // the bubble and the sources row are grouped in this column container
+    // to stack the chips below the bubble instead of beside it.
+    const content = document.createElement('div');
+    content.className = 'chat-content';
     const bubble = document.createElement('div');
     bubble.className = 'chat-bubble';
-    bubble.textContent = text;
-    wrapper.appendChild(bubble);
+    if (sender === 'bot') {
+      // LLM output only — sanitized before injecting. User input never
+      // takes this path (see below), it always stays on textContent.
+      bubble.innerHTML = DOMPurify.sanitize(marked.parse(text));
+    } else {
+      bubble.textContent = text;
+    }
+    content.appendChild(bubble);
+    if (sender === 'bot') appendSources(content, sources);
+    wrapper.appendChild(content);
     messages.appendChild(wrapper);
     scrollToBottom();
   }
@@ -60,7 +97,7 @@
       throw new Error(`Chat request failed with status ${response.status}`);
     }
     const data = await response.json();
-    return data.reply;
+    return { reply: data.reply, sources: data.sources };
   }
 
   form.addEventListener('submit', async (event) => {
@@ -74,9 +111,9 @@
 
     showTypingIndicator();
     try {
-      const reply = await sendMessage(message);
+      const { reply, sources } = await sendMessage(message);
       hideTypingIndicator();
-      appendMessage(reply, 'bot');
+      appendMessage(reply, 'bot', sources);
     } catch (error) {
       hideTypingIndicator();
       appendMessage('Sorry, something went wrong. Please try again.', 'bot');

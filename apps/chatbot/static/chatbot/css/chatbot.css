@@ -105,9 +105,14 @@
 .chat-message-bot {
   justify-content: flex-start;
 }
+.chat-content {
+  display: flex;
+  flex-direction: column;
+  max-width: 75%;
+}
 
 .chat-bubble {
-  max-width: 75%;
+  max-width: 100%;
   padding: 0.65rem 1rem;
   border-radius: 1rem;
   font-size: 0.9rem;
@@ -163,6 +168,67 @@
     animation: none;
     opacity: 0.85;
   }
+}
+
+/* Markdown rendered inside bot bubbles (marked.js + DOMPurify output) —
+   reuses the same tokens as the rest of the chat window, no new colors. */
+.chat-bubble p {
+  margin: 0 0 0.5rem;
+}
+.chat-bubble p:last-child {
+  margin-bottom: 0;
+}
+.chat-bubble ul,
+.chat-bubble ol {
+  margin: 0 0 0.5rem;
+  padding-left: 1.25rem;
+}
+.chat-bubble li {
+  margin-bottom: 0.2rem;
+}
+.chat-bubble strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.chat-bubble h1,
+.chat-bubble h2,
+.chat-bubble h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.chat-bubble table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+}
+.chat-bubble th,
+.chat-bubble td {
+  border: 1px solid var(--color-border);
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+}
+.chat-bubble th {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+/* Sources chip row, shown under a bot reply when data.sources is non-empty. */
+.chat-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.chat-source-chip {
+  background: var(--chip-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  color: var(--color-muted);
 }
 
 .chat-input-bar {

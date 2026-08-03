@@ -141,4 +141,187 @@ Net: a real, honest 85-93% latency reduction on the two large-partition query sh
 | 14 | `ambiguous_entity` | Wrong — mixed artist/label answer for "Georgia" | Same kind of answer, still not gated (distance 1.098, just under the 1.10 threshold) | Unchanged — known, documented borderline case (item 1's design note) |
 | 15 | `lowercase_entity` | Correct | Correct (unchanged, confirmed not regressed by the confidence gate) | Unchanged — already passing, **and confirmed not regressed** by the gate-scoping decision in item 1 |
 
+---
+
+# Markdown UI Improvement — Items 1-5 (separate, later task)
+
+Scoped implementation of 5 UI/formatting items, validated beforehand in
+`MARKDOWN_UI_PLAN_VALIDATION.md`. Files touched: `apps/chatbot/rag.py`,
+`apps/chatbot/templates/chatbot/chatbot.html`, `apps/chatbot/static/chatbot/js/chatbot.js`,
+`apps/chatbot/static/chatbot/css/chatbot.css`. No other files modified. SQL router query logic,
+confidence-gate threshold, and retrieval logic (all P0 work above) were not touched.
+
+## Item 1 — SYSTEM_PROMPT formatting instruction
+
+**File**: `apps/chatbot/rag.py:232-241`
+
+Before:
+```python
+SYSTEM_PROMPT = (
+    "You are a data analyst assistant for a Spotify streaming analytics "
+    "platform. Answer the user's question using ONLY the context provided "
+    "below. If the context doesn't contain the answer, say so — do not "
+    "make up numbers. When you cite a fact, name the artist/country/label "
+    "and time period it came from."
+)
+```
+
+After — appended one sentence, existing instruction unchanged:
+```python
+SYSTEM_PROMPT = (
+    "You are a data analyst assistant for a Spotify streaming analytics "
+    "platform. Answer the user's question using ONLY the context provided "
+    "below. If the context doesn't contain the answer, say so — do not "
+    "make up numbers. When you cite a fact, name the artist/country/label "
+    "and time period it came from. "
+    "Format your response in markdown: bold key numbers and entity names "
+    "with **asterisks**, use a bullet list when presenting 2 or more facts "
+    "or a comparison, keep paragraphs to 2-3 lines, and use a markdown "
+    "table when comparing multiple entities across the same metrics."
+)
+```
+
+**Evidence** (`ui_baseline_after.json`, comparison question): the LLM went beyond bullets and
+produced a full markdown table on its own for the India/Brazil comparison — headers
+`Country | Year | Total Streams | Average Market Share`, rendered correctly in the browser (see
+Item 5 evidence below).
+
+## Item 2 — SQL-router reply formatting
+
+**File**: `apps/chatbot/rag.py:438`
+
+Before:
+```python
+return {'reply': f"There are {count} distinct {label} in the data.", 'sources': [description]}
+```
+After:
+```python
+return {'reply': f"There are **{count}** distinct {label} in the data.", 'sources': [description]}
+```
+
+This was the only hardcoded, LLM-bypassing reply string in the SQL router path (`rag.py:434-441`).
+The other two SQL-router kinds (`superlative`, `trend`) already route through
+`build_sql_prompt()` + `_call_llm()`, so Item 1's prompt change reaches them automatically — no
+separate f-string edit needed for those.
+
+**Evidence** — before: `"There are 73 distinct countries in the data."` / after:
+`"There are **73** distinct countries in the data."`, confirmed rendering as bold **73** in the
+browser.
+
+## Item 3 — Markdown rendering + sanitization
+
+**Files**: `chatbot.html` (new CDN scripts), `chatbot.js` (`appendMessage()` branch)
+
+`chatbot.html` — added two CDN `<script>` tags, scoped to this page only (not `base.html`):
+```html
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.5/dist/purify.min.js"></script>
+<script src="{% static 'chatbot/js/chatbot.js' %}"></script>
+```
+
+`chatbot.js` — `appendMessage()` now branches by sender:
+```js
+if (sender === 'bot') {
+  bubble.innerHTML = DOMPurify.sanitize(marked.parse(text));
+} else {
+  bubble.textContent = text;
+}
+```
+DOMPurify's default safelist is used, no config overrides. User-sender path is byte-for-byte
+unchanged from the original (`textContent`).
+
+**Verified live in browser** (Chrome extension, `http://127.0.0.1:8000/chatbot/`):
+- "How many countries are covered in the data?" → rendered as bold **73**, no raw asterisks visible.
+- "Compare India and Brazil's streaming performance." → rendered with an `<h3>` heading, a
+  bulleted list, bold country names/numbers, and a real `<table>` (border, header row).
+- "How did Kendrick Lamar perform in 2024?" → rendered with bold key numbers and a bulleted list
+  of metrics.
+- **DOM structure check** (`read_page` accessibility tree): user messages appear as flat
+  single-text nodes with no children; the bot reply for the comparison question shows real nested
+  elements (`strong`, `list`/`listitem`, `table` with cells) — structurally confirms bot output is
+  parsed as markdown/HTML while user input stays plain text.
+- No console errors during any of the three sends (`read_console_messages`).
+
+## Item 4 — Sources display
+
+**Files**: `chatbot.js` (new `formatSource()`/`appendSources()`, fetch handler, submit handler)
+
+Before, `sendMessage()` returned only `data.reply` — `data.sources` was read from the API response
+and silently discarded. Now:
+```js
+const data = await response.json();
+return { reply: data.reply, sources: data.sources };
+```
+and the submit handler passes `sources` through to `appendMessage()`, which renders one chip per
+source string via a new `appendSources()` helper. Source strings (e.g.
+`"country_performance:India|2023"`, `"sql:country_performance:COUNT(DISTINCT country_name)"`) are
+plain strings, not structured objects — `formatSource()` trims the table-name prefix and, if the
+key contains `|year`, formats it as `"key (year)"`.
+
+**Bug found and fixed during live testing** (required for Item 4 to actually work as intended, not
+in the original plan text): `.chat-message` is `display: flex` (row) for left/right message
+alignment. The first implementation appended the bubble and the sources row as direct siblings of
+that flex row, so chips rendered *beside* the bubble instead of *below* it. Fixed by introducing a
+`.chat-content` column wrapper (`chatbot.js`) holding the bubble + sources together, and adjusting
+`max-width` on `.chat-bubble` (100%, was 75%) and `.chat-sources` (removed its own 75%) since the
+75% constraint now lives on the new wrapper — two nested 75%'s would have made bubbles too narrow.
+Verified visually after the fix: chips sit in a wrapped row directly under the bubble.
+
+**Evidence**: count question shows one chip, `COUNT(DISTINCT country_name)`, under the reply.
+Comparison question shows 10 chips (`Brazil (2025)`, `India (2022)`, etc.) wrapping onto multiple
+rows under the reply, styled with `--chip-bg`/`--color-border`/`--color-muted` — no new hardcoded
+colors.
+
+## Item 5 — Markdown CSS
+
+**File**: `chatbot.css` — added rules for `p`, `ul`/`ol`/`li`, `strong`, `h1`-`h3`, `table`/`th`/`td`
+inside `.chat-bubble`, plus `.chat-content` and `.chat-sources`/`.chat-source-chip`. All values
+reuse existing tokens from `main.css` (`--color-ink`, `--color-body`, `--color-muted`,
+`--color-border`, `--chip-bg`, `--radius-md`) — no new hardcoded colors introduced. No light-theme
+variant added, matching the rest of the project (dark-only).
+
+**Evidence**: table borders, bold headings, bullet indentation, and chip styling all render
+consistent with the rest of the dark-theme chat window (card background, border color, muted text
+for secondary info) — see Item 3/4 evidence above.
+
+---
+
+### Markdown-rendering oddities observed
+
+- **Artist source chips show a raw Spotify URI, not an artist name** — e.g.
+  `2YZyLoL8N0Wb9xBt1NhZWg (2024)`. `source_key` for `artist_performance` chunks is the
+  `artist_uri`, not `artist_name` (existing chunk-key design from `build_gold_chunks.py`, not
+  touched here). Country/SQL sources display cleanly (`India (2022)`,
+  `COUNT(DISTINCT country_name)`) since those keys are already human-readable. Not fixed — would
+  require changing `source_key` format in retrieval/chunk-building code, out of scope.
+- No broken/unclosed markdown (no stray asterisks, no malformed nested lists) observed in any of
+  the 3 test replies — Groq's `llama-3.3-70b-versatile` output was well-formed markdown in every
+  case, including the unprompted table it generated for the comparison question.
+- SQL-router `count` replies and the confidence-gate `NO_DATA_REPLY` string are plain sentences
+  with no markdown syntax beyond the one bolded number added in Item 2 — pass through
+  `marked.parse()` harmlessly.
+
+### Confirmed: user input never passed through marked.parse()
+
+- Code: `appendMessage()`'s `else` branch (any non-`'bot'` sender) is untouched from the original —
+  still `bubble.textContent = text`.
+- Live DOM check: user message nodes in the accessibility tree are flat text with no child
+  elements, unlike bot replies which show real `<strong>`/`<ul>`/`<table>` structure.
+
+### Baseline files
+
+- `ui_baseline_before.json` — 3 questions (normal factual, comparison, count/SQL-router), raw API
+  JSON captured before any change.
+- `ui_baseline_after.json` — same 3 questions, captured after all 5 items implemented.
+- Reply text content is materially unchanged in meaning between before/after (same facts, same
+  numbers) — the only difference is markdown syntax now present in `reply` where before it was
+  plain prose. `sources` arrays are identical between before/after for all 3 questions (retrieval
+  logic untouched, as required).
+
+**Plain-English verdict**: yes, the rendered output looks better — bold numbers and entity names
+stand out, multi-fact answers are scannable as bullets instead of one dense paragraph, the
+comparison question renders as an actual table, and sources (previously silently dropped by the
+frontend) are now visible as chips under each bot reply. No raw `**`/`-`/`#` markdown characters
+are visible in the rendered UI.
+
 **Summary**: **7 of 15** tested questions flipped from fail to pass — `comparison_2_countries` (item 2), `superlative_country`, `superlative_artist_growth`, `count_labels`, `count_countries` (item 3), `missing_field_probe` (item 4), `out_of_scope` (item 1). **5 stayed correctly unchanged** as already-passing (`single_entity_lookup`, `multi_year_trend`, `country_specific`, `lowercase_entity` — the last explicitly confirmed *not* regressed by the item-1 gate-scoping decision — plus `label_specific`, an unchanged, correctly-out-of-scope hedge). **3 remain known, explicitly out-of-scope limitations** (`comparison_2_artists`, `nonexistent_entity`, `ambiguous_entity`), each requiring P1 work (an artist-name index, an entity-existence layer) that was correctly not attempted per the scope constraints. **Zero net regressions** in the final state — one was found mid-implementation (item 5, pgvector's default `ivfflat.probes=1`), diagnosed with a direct exact-vs-approximate comparison, and fixed within item 5's own scope (tuning `probes`, not touching anything outside the approved file list) before finalizing `baseline_after.json`.

@@ -234,7 +234,11 @@ SYSTEM_PROMPT = (
     "platform. Answer the user's question using ONLY the context provided "
     "below. If the context doesn't contain the answer, say so — do not "
     "make up numbers. When you cite a fact, name the artist/country/label "
-    "and time period it came from."
+    "and time period it came from. "
+    "Format your response in markdown: bold key numbers and entity names "
+    "with **asterisks**, use a bullet list when presenting 2 or more facts "
+    "or a comparison, keep paragraphs to 2-3 lines, and use a markdown "
+    "table when comparing multiple entities across the same metrics."
 )
 
 
@@ -431,7 +435,7 @@ def get_rag_reply(question):
             count = rows[0][1]
             table = rows[0][0]
             label = _TABLE_DISPLAY_NAME.get(table, table)
-            return {'reply': f"There are {count} distinct {label} in the data.", 'sources': [description]}
+            return {'reply': f"There are **{count}** distinct {label} in the data.", 'sources': [description]}
         prompt = build_sql_prompt(question, rows, description)
         reply_text = _call_llm(prompt)
         return {'reply': reply_text, 'sources': [description]}
