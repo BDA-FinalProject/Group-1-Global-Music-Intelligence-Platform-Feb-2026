@@ -58,9 +58,12 @@ repo-root path, they can't be nested.
    terraform apply
    ```
    All variables have defaults matching this project's actual config
-   (`spotify-lake` / `dev` / `ap-south-1` / the Kaggle dataset), so no
-   `.tfvars` file is required for dev. Note the `github_actions_role_arn`
-   output — you'll need it in step 5.
+   (`spotify-lake` / `dev` / `us-east-1` / the Kaggle dataset), so no
+   `.tfvars` file is required for dev. Defaults also assume a sandbox
+   account (`use_lab_instance_profile = true`, `enable_github_oidc =
+   false`) — see `README.md` in this folder for what to flip for a real
+   AWS account, which also gets you the `github_actions_role_arn` output
+   used in step 5.
 
 3. **Seed the real Kaggle credentials** (Terraform created the parameters
    with a placeholder value and will never touch `value` again after this):
@@ -88,7 +91,9 @@ repo-root path, they can't be nested.
    python3 ingest.py
    ```
 
-5. **Wire up GitHub Actions** so pushes to `main` run `terraform apply`
+5. **Wire up GitHub Actions** (real AWS account only — set
+   `enable_github_oidc = true` and re-apply first; sandbox accounts can't
+   create the OIDC provider) so pushes to `main` run `terraform apply`
    automatically:
    - In the GitHub repo settings, add a repository **variable** (not
      secret — it's not sensitive) named `AWS_GITHUB_ACTIONS_ROLE_ARN` set
