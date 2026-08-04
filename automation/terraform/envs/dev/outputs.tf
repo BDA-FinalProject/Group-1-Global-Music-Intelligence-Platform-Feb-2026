@@ -25,3 +25,7 @@ output "kaggle_username_param_name" {
 output "kaggle_key_param_name" {
   value = module.ssm_kaggle_creds.kaggle_key_param_name
 }
+
+output "glue_silver_job_name" {
+  value = module.glue_silver_song_charts.job_name
+}

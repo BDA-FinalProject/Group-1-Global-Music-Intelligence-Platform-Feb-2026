@@ -26,8 +26,9 @@ variable "kaggle_slug" {
 }
 
 variable "target_file" {
-  type    = string
-  default = "charts_songs_daily.csv.gz"
+  description = "Kaggle serves this uncompressed (no .gz) — confirmed via `kaggle datasets files -d <slug>`."
+  type        = string
+  default     = "charts_songs_daily.csv"
 }
 
 variable "table_name" {
@@ -62,4 +63,19 @@ variable "enable_github_oidc" {
   description = "false in the AWS Academy Learner Lab sandbox (can't create an OIDC provider/IAM role there). Set true from a real AWS account to wire up GitHub Actions CI."
   type        = bool
   default     = false
+}
+
+variable "glue_worker_type" {
+  type    = string
+  default = "G.1X"
+}
+
+variable "glue_number_of_workers" {
+  type    = number
+  default = 2
+}
+
+variable "glue_timeout_minutes" {
+  type    = number
+  default = 30
 }
