@@ -57,6 +57,20 @@ module "glue_silver_song_charts" {
   timeout           = var.glue_timeout_minutes
 }
 
+module "glue_gold_layer" {
+  source = "../../modules/glue_job"
+
+  job_name          = "${var.project_name}-${var.env}-gold-layer"
+  script_local_path = "${path.module}/../../../glue_jobs/gold_layer_etl.py"
+  script_s3_bucket  = module.data_lake.glue_assets_bucket_name
+  script_s3_key     = "scripts/gold_layer_etl.py"
+  use_lab_role      = var.use_lab_instance_profile
+  lab_role_name     = "LabRole"
+  number_of_workers = var.glue_number_of_workers
+  worker_type       = var.glue_worker_type
+  timeout           = var.glue_timeout_minutes
+}
+
 # Sandbox accounts (AWS Academy Learner Lab etc.) deny iam:CreateRole and
 # iam:CreateOpenIDConnectProvider outright — this module can't apply there
 # at all. Toggle it off with enable_github_oidc = false in that case; the

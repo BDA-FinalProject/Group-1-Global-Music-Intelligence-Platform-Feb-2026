@@ -29,3 +29,7 @@ output "kaggle_key_param_name" {
 output "glue_silver_job_name" {
   value = module.glue_silver_song_charts.job_name
 }
+
+output "glue_gold_job_name" {
+  value = module.glue_gold_layer.job_name
+}
