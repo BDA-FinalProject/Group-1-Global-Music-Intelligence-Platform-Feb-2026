@@ -24,6 +24,13 @@ S3 bronze/ prefix (raw csv + parquet, both partitioned by ingest_date)
         │  clean, dedupe, country-standardize, feature-engineer
         ▼
 S3 silver/song_charts/ (Parquet, partitioned by year/month)
+        │  AWS Glue (PySpark) job
+        │  aggregate + window functions (top artist/label, growth %,
+        │  market share, catalog hit rate)
+        ▼
+S3 gold/ — 5 business-ready tables:
+        dashboard_summary, country_performance, monthly_trends,
+        label_performance, artist_performance
 ```
 
 Everything that provisions this — the S3 buckets, the EC2 instance, the
@@ -39,6 +46,7 @@ and repeatable instead of one-off console setup.
 | `automation/terraform/envs/dev/` | Root module — wires everything together, one `apply` builds the whole stack |
 | `automation/ingestion/ingest.py` | The ingestion script that runs on the EC2 instance (bronze) |
 | `automation/glue_jobs/silver_song_charts.py` | PySpark job: bronze → silver (cleaning, country names, hit-category/chart-strength features) |
+| `automation/glue_jobs/gold_layer_etl.py` | PySpark job: silver → 5 gold tables (dashboard/country/monthly/label/artist) |
 | `automation/terraform-ci.sh` | fmt/init/validate/plan/apply, identical in CI and local runs |
 | `.github/workflows/terraform.yml` | GitHub Actions entrypoint — PR gets `plan`, merge to `main` gets `apply`, authenticated via OIDC (no AWS keys stored in GitHub) |
 | `automation/README.md` | Technical reference: layout, sandbox-account toggles, bugs hit and fixed |
@@ -87,6 +95,14 @@ account end to end:
    the new analytical columns. Unlike EC2, a Glue job only costs money
    while a run is actively executing — nothing to tear down once it
    finishes.
+7. Reused the same `glue_job` module for a second job, silver→gold. Fixed
+   a real bug in the source script first — it referenced
+   `col("artist_uri")` but the actual silver column is `artist_uris`
+   (plural), which would have failed with `AnalysisException` on every
+   run. Triggered it — **SUCCEEDED in 336 seconds**, produced all 5 gold
+   tables, spot-checked (`active_artists` counts are real, non-null;
+   `dashboard_summary` and `monthly_trends` agree on their overlapping
+   columns).
 
 ## Where to go next
 
@@ -94,5 +110,5 @@ account end to end:
   commands, in order.
 - Want the technical details (toggles, known gotchas, architecture)?
   `automation/README.md`.
-- Bronze→silver (this branch) is done. Silver→gold, Athena, and the
+- Bronze→silver→gold (this branch) is done, end to end. Athena and the
   Postgres/RAG serving layer are separate, later work.
