@@ -20,20 +20,25 @@ EC2 ingestion instance
         │  works regardless of file size)
         ▼
 S3 bronze/ prefix (raw csv + parquet, both partitioned by ingest_date)
+        │  AWS Glue (PySpark) job
+        │  clean, dedupe, country-standardize, feature-engineer
+        ▼
+S3 silver/song_charts/ (Parquet, partitioned by year/month)
 ```
 
 Everything that provisions this — the S3 buckets, the EC2 instance, the
-IAM/SSM wiring, the CI pipeline — is Terraform, reviewable and repeatable
-instead of one-off console setup.
+Glue job, the IAM/SSM wiring, the CI pipeline — is Terraform, reviewable
+and repeatable instead of one-off console setup.
 
 ## What's in this branch
 
 | Path | What it is |
 |---|---|
 | `automation/terraform/bootstrap/` | One-time S3 bucket for Terraform state |
-| `automation/terraform/modules/` | 4 building blocks: `data_lake`, `ssm_kaggle_creds`, `ec2_ingestion`, `github_oidc` |
+| `automation/terraform/modules/` | 5 building blocks: `data_lake`, `ssm_kaggle_creds`, `ec2_ingestion`, `glue_job`, `github_oidc` |
 | `automation/terraform/envs/dev/` | Root module — wires everything together, one `apply` builds the whole stack |
-| `automation/ingestion/ingest.py` | The actual ingestion script that runs on the EC2 instance |
+| `automation/ingestion/ingest.py` | The ingestion script that runs on the EC2 instance (bronze) |
+| `automation/glue_jobs/silver_song_charts.py` | PySpark job: bronze → silver (cleaning, country names, hit-category/chart-strength features) |
 | `automation/terraform-ci.sh` | fmt/init/validate/plan/apply, identical in CI and local runs |
 | `.github/workflows/terraform.yml` | GitHub Actions entrypoint — PR gets `plan`, merge to `main` gets `apply`, authenticated via OIDC (no AWS keys stored in GitHub) |
 | `automation/README.md` | Technical reference: layout, sandbox-account toggles, bugs hit and fixed |
@@ -76,6 +81,12 @@ account end to end:
 4. **42,869,655 rows** landed in S3 as Parquet, confirmed via `aws s3 ls`
 5. Tore the EC2 instance down again once confirmed (`terraform destroy
    -target=module.ec2_ingestion`) so nothing keeps billing
+6. Applied the `glue_job` module, triggered a real run
+   (`aws glue start-job-run`), and it **SUCCEEDED in 612 seconds** —
+   `silver/song_charts/` now has cleaned, year/month-partitioned data with
+   the new analytical columns. Unlike EC2, a Glue job only costs money
+   while a run is actively executing — nothing to tear down once it
+   finishes.
 
 ## Where to go next
 
@@ -83,5 +94,5 @@ account end to end:
   commands, in order.
 - Want the technical details (toggles, known gotchas, architecture)?
   `automation/README.md`.
-- This is phase 1 only. Glue transforms (bronze→silver→gold), Athena, and
-  the Postgres/RAG serving layer are separate, later work.
+- Bronze→silver (this branch) is done. Silver→gold, Athena, and the
+  Postgres/RAG serving layer are separate, later work.
