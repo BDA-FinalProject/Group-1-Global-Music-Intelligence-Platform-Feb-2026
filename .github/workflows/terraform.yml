@@ -1,0 +1,39 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "automation/terraform/**"
+      - "automation/terraform-ci.sh"
+      - ".github/workflows/terraform.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "automation/terraform/**"
+      - "automation/terraform-ci.sh"
+      - ".github/workflows/terraform.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform plan or apply
+        env:
+          TF_ACTION: ${{ github.event_name == 'pull_request' && 'plan' || 'apply' }}
+        run: automation/terraform-ci.sh "$TF_ACTION"
