@@ -11,62 +11,106 @@ on:
       - dev
 
 jobs:
-  validate:
-    name: Validate Python and Terraform
+  ci-validate:
+    name: Continuous Integration Validation
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout Repository
+      # 1. Checkout repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Setup Python
-      - name: Setup Python
+      # 2. Setup Python 3.12
+      - name: Setup Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
-      # 3. Install Python dependencies (if requirements.txt is not empty)
-      - name: Install Python Dependencies
+      # 3. Upgrade pip
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      # 4. Install requirements.txt (if exists)
+      - name: Install dependencies
         run: |
-          if [ -s requirements.txt ]; then
-            pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            if [ -s requirements.txt ]; then
+              pip install -r requirements.txt
+            else
+              echo "requirements.txt is empty. Skipping installation."
+            fi
           else
-            echo "requirements.txt is empty. Skipping pip install."
+            echo "requirements.txt does not exist. Skipping."
           fi
 
-      # 4. Verify ETL syntax
-      - name: Verify ETL syntax
+      # 5. Install Ruff
+      - name: Install Ruff
+        run: pip install ruff
+
+      # 6. Run python -m compileall etl/
+      - name: Compile All ETL Scripts
         run: python -m compileall etl/
 
-      # 5. Setup Terraform
+      # 7. Verify every ETL file can be compiled individually
+      - name: Compile ETL Files Individually
+        run: |
+          echo "Compiling each file in etl/ individually..."
+          for file in etl/*.py; do
+            if [ -f "$file" ]; then
+              echo "Compiling $file..."
+              python -m py_compile "$file"
+            fi
+          done
+
+      # 8. Run ruff check .
+      - name: Run Ruff Linter
+        run: ruff check .
+
+      # 9. Verify required folders exist
+      - name: Verify Required Directories
+        run: |
+          for dir in etl terraform ingestion .github; do
+            if [ -d "$dir" ]; then
+              echo "✓ Directory '$dir' exists."
+            else
+              echo "✗ Error: Directory '$dir' is missing!"
+              exit 1
+            fi
+          done
+
+      # 10. Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.5.7'
 
-      # 6. Terraform Format Check
+      # 11. terraform fmt -check
       - name: Terraform Format Check
         run: terraform fmt -check
         working-directory: terraform
 
-      # 7. Terraform Init
+      # 12. terraform init
       - name: Terraform Init
         run: terraform init -backend=false
         working-directory: terraform
 
-      # 8. Terraform Validate
+      # 13. terraform validate
+      # 14. Fail if validation fails
       - name: Terraform Validate
         run: terraform validate
         working-directory: terraform
 
-      # 9. Run Ruff (if configured)
-      - name: Run Ruff (if configured)
+      # 15. Display CI Passed Successfully
+      - name: Display Success Message
+        run: echo "CI Passed Successfully"
+
+      # Optional Test Stage: Run pytest if tests/ exists
+      - name: Run pytest (if tests/ exists)
         run: |
-          if [ -f "pyproject.toml" ] || [ -f "ruff.toml" ] || grep -q "ruff" requirements.txt 2>/dev/null; then
-            echo "Ruff is configured. Running ruff check..."
-            pip install ruff
-            ruff check etl/
+          if [ -d "tests" ]; then
+            echo "Running pytest..."
+            pip install pytest
+            pytest
           else
-            echo "Ruff is not configured. Skipping."
+            echo "No 'tests/' directory found. Skipping test stage."
           fi
