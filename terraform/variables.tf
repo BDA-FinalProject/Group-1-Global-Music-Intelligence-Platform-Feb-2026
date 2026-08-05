@@ -55,7 +55,7 @@ variable "create_s3_bucket" {
 variable "create_glue_database" {
   description = "Whether to create the Glue database. If false, references existing database via data source."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "create_glue_job_silver" {
