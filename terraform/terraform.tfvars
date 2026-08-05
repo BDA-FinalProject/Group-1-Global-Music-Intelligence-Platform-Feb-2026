@@ -1,15 +1,10 @@
-aws_region = "us-east-1"
-
-glue_job_silver_name = "silver job"
-glue_job_gold_name   = "gold job"
-
-glue_crawler_name = "spotify_test"
-
-glue_database_name = "spotify-test"
-
-glue_role_name = "AWSGlueServiceRoleDefault"
-
-script_bucket_name = "REPLACE_WITH_BUCKET"
-
-silver_script_key = "etl/final_silver_etl.py"
-gold_script_key   = "etl/gold_etl.py"
+# Local development variables (commented out to allow GitHub Actions environment variables to take precedence)
+# aws_region = "us-east-1"
+# glue_job_silver_name = "silver job"
+# glue_job_gold_name   = "gold job"
+# glue_crawler_name = "spotify_test"
+# glue_database_name = "spotify-test"
+# glue_role_name = "AWSGlueServiceRoleDefault"
+# script_bucket_name = "REPLACE_WITH_BUCKET"
+# silver_script_key = "etl/final_silver_etl.py"
+# gold_script_key   = "etl/gold_etl.py"

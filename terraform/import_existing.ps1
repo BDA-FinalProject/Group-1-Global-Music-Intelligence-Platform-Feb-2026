@@ -31,7 +31,7 @@ Write-Host " Checking existing AWS resources for Terraform Import..."
 Write-Host "=========================================================="
 
 # 1. S3 Bucket
-if (![string]::IsNullOrEmpty($BucketName) -and $BucketName -ne "REPLACE_WITH_BUCKET") {
+if (![string]::IsNullOrEmpty($BucketName)) {
     Write-Host "Checking S3 Bucket '$BucketName'..."
     aws s3api head-bucket --bucket $BucketName 2>$null
     if ($LASTEXITCODE -eq 0) {

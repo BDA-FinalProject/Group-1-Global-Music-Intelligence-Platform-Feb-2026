@@ -29,7 +29,7 @@ echo " Checking existing AWS resources for Terraform Import..."
 echo "=========================================================="
 
 # 1. S3 Bucket
-if [ -n "$BUCKET_NAME" ] && [ "$BUCKET_NAME" != "REPLACE_WITH_BUCKET" ]; then
+if [ -n "$BUCKET_NAME" ]; then
   echo "Checking S3 Bucket '$BUCKET_NAME'..."
   aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1
   if [ $? -eq 0 ]; then
