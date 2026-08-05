@@ -1,0 +1,14 @@
+# Ruff configuration file
+
+# Exclude directories that are not production source code (notebooks, docs, dashboard, etc.)
+exclude = [
+    ".git",
+    ".github",
+    "notebooks",
+    "docs",
+    "dashboard",
+    "rag",
+]
+
+# Set the source directories for the project
+src = ["etl", "ingestion", "config", "tests"]

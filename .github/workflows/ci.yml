@@ -62,9 +62,17 @@ jobs:
             fi
           done
 
-      # 8. Run ruff check .
+      # 8. Run ruff check on production directories
       - name: Run Ruff Linter
-        run: ruff check .
+        run: |
+          TARGETS=""
+          for dir in etl ingestion config tests; do
+            if [ -d "$dir" ]; then
+              TARGETS="$TARGETS $dir"
+            fi
+          done
+          echo "Running ruff check on: $TARGETS"
+          ruff check $TARGETS
 
       # 9. Verify required folders exist
       - name: Verify Required Directories
