@@ -1,9 +1,6 @@
 name: Deploy Glue CI/CD
 
 on:
-  push:
-    branches:
-      - feature/glue-cicd-terraform
   workflow_dispatch:
 
 jobs:
