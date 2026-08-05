@@ -34,101 +34,48 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # Check AWS Resource Existence to set variables for Terraform conditional logic
-      - name: Check AWS Resource Existence
-        id: check-resources
-        run: |
-          echo "Checking S3 Bucket..."
-          if aws s3api head-bucket --bucket "${{ vars.S3_BUCKET_NAME }}" >/dev/null 2>&1; then
-            echo "TF_VAR_create_s3_bucket=false" >> $GITHUB_ENV
-            echo "S3 Bucket exists."
-          else
-            echo "TF_VAR_create_s3_bucket=true" >> $GITHUB_ENV
-            echo "S3 Bucket does not exist."
-          fi
-
-          echo "Checking Glue Database..."
-          if aws glue get-database --name "${{ vars.DATABASE_GLUE }}" >/dev/null 2>&1; then
-            echo "TF_VAR_create_glue_database=false" >> $GITHUB_ENV
-            echo "Glue Database exists."
-          else
-            echo "TF_VAR_create_glue_database=true" >> $GITHUB_ENV
-            echo "Glue Database does not exist."
-          fi
-
-          echo "Checking Silver Glue Job..."
-          if aws glue get-job --job-name "${{ vars.GLUE_JOB_SILVER }}" >/dev/null 2>&1; then
-            echo "TF_VAR_create_glue_job_silver=false" >> $GITHUB_ENV
-            echo "Silver Glue Job exists."
-          else
-            echo "TF_VAR_create_glue_job_silver=true" >> $GITHUB_ENV
-            echo "Silver Glue Job does not exist."
-          fi
-
-          echo "Checking Gold Glue Job..."
-          if aws glue get-job --job-name "${{ vars.GLUE_JOB_GOLD }}" >/dev/null 2>&1; then
-            echo "TF_VAR_create_glue_job_gold=false" >> $GITHUB_ENV
-            echo "Gold Glue Job exists."
-          else
-            echo "TF_VAR_create_glue_job_gold=true" >> $GITHUB_ENV
-            echo "Gold Glue Job does not exist."
-          fi
-
-          echo "Checking Glue Crawler..."
-          if aws glue get-crawler --name "${{ vars.GLUE_CRAWLER }}" >/dev/null 2>&1; then
-            echo "TF_VAR_create_glue_crawler=false" >> $GITHUB_ENV
-            echo "Glue Crawler exists."
-          else
-            echo "TF_VAR_create_glue_crawler=true" >> $GITHUB_ENV
-            echo "Glue Crawler does not exist."
-          fi
-
-      # 3. Setup Terraform
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ vars.TF_VERSION || '1.5.7' }}
-
-      # 4. terraform fmt
-      - name: Terraform Format
-        run: terraform fmt -check
-        working-directory: terraform
-
-      # 5. terraform init
-      - name: Terraform Init
-        run: terraform init
-        working-directory: terraform
-
-      # 6. terraform validate
-      - name: Terraform Validate
-        run: terraform validate
-        working-directory: terraform
-
-      # 7. terraform plan
-      - name: Terraform Plan
-        run: terraform plan
-        working-directory: terraform
-
-      # 8. terraform apply
-      - name: Terraform Apply
-        run: terraform apply -auto-approve
-        working-directory: terraform
-
-      # 9. Upload ETL Scripts
+      # 3. Upload ETL Scripts to S3
       - name: Upload ETL Scripts to S3
         run: |
           echo "Uploading ETL Scripts to S3 Bucket: ${{ vars.S3_BUCKET_NAME }}..."
           aws s3 cp etl/final_silver_etl.py s3://${{ vars.S3_BUCKET_NAME }}/etl/final_silver_etl.py
           aws s3 cp etl/gold_etl.py s3://${{ vars.S3_BUCKET_NAME }}/etl/gold_etl.py
 
-      # Update Glue Job script locations
-      - name: Update Glue Job Script Locations
-        run: |
-          echo "Ensuring Silver Glue Job script path is updated..."
-          aws glue update-job --job-name "${{ vars.GLUE_JOB_SILVER }}" --job-update "Role=$(aws glue get-job --job-name \"${{ vars.GLUE_JOB_SILVER }}\" --query 'Job.Role' --output text),Command={Name=glueetl,ScriptLocation=s3://${{ vars.S3_BUCKET_NAME }}/etl/final_silver_etl.py,PythonVersion=3}"
-          
-          echo "Ensuring Gold Glue Job script path is updated..."
-          aws glue update-job --job-name "${{ vars.GLUE_JOB_GOLD }}" --job-update "Role=$(aws glue get-job --job-name \"${{ vars.GLUE_JOB_GOLD }}\" --query 'Job.Role' --output text),Command={Name=glueetl,ScriptLocation=s3://${{ vars.S3_BUCKET_NAME }}/etl/gold_etl.py,PythonVersion=3}"
+      # 4. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ vars.TF_VERSION || '1.5.7' }}
+
+      # 5. Terraform Format
+      - name: Terraform Format
+        run: terraform fmt -check
+        working-directory: terraform
+
+      # 6. Terraform Init
+      - name: Terraform Init
+        run: terraform init
+        working-directory: terraform
+
+      # 7. Import Existing AWS Resources
+      - name: Import Existing AWS Resources
+        run: bash import_existing.sh
+        working-directory: terraform
+
+      # 8. Terraform Validate
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: terraform
+
+      # 9. Terraform Plan
+      - name: Terraform Plan
+        run: terraform plan
+        working-directory: terraform
+
+      # 10. Terraform Apply
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        working-directory: terraform
 
       # 10. Start Glue Job Bronze→Silver
       # 11. Wait until Success
