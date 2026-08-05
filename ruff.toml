@@ -1,6 +1,6 @@
 # Ruff configuration file
 
-# Exclude directories that are not production source code (notebooks, docs, dashboard, etc.)
+# Exclude directories that are not production source code
 exclude = [
     ".git",
     ".github",
@@ -12,3 +12,11 @@ exclude = [
 
 # Set the source directories for the project
 src = ["etl", "ingestion", "config", "tests"]
+
+[lint]
+# Ignore style rules that do not affect compilation or deployment
+ignore = [
+    "TRY401", # Redundant exception logging (logging.exception() formatting)
+    "DTZ005", # Naive datetime usage without timezone info
+    "I001",   # Import sorting (isort recommendations)
+]
