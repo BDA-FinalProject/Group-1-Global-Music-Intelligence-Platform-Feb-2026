@@ -1,13 +1,21 @@
 """
 Description
 -----------
-Reads Spotify Bronze layer data from Amazon S3 and transforms it into the
-Silver layer by performing:
+Reads Spotify Bronze layer data (raw CSV) from Amazon S3 and transforms it
+into the Silver layer by performing:
 
 • Data Cleaning
 • Country Standardization
 • Feature Engineering
 • Optimized Parquet Writes
+
+Incremental Loading
+--------------------
+Bronze holds one full-history CSV snapshot per ingest_date (Kaggle serves
+the whole dataset each time, not a delta). This job only reprocesses rows
+newer than what's already in Silver: it reads the latest Bronze snapshot,
+filters to `date > max(date already in Silver)`, and appends the result.
+On the very first run (no Silver data yet), the full snapshot is processed.
 
 Outputs
 -------
@@ -20,6 +28,7 @@ Outputs
 
 import logging
 
+import boto3
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
@@ -27,6 +36,7 @@ from pyspark.sql.functions import (
     initcap,
     lit,
     lower,
+    max as spark_max,
     month,
     quarter,
     round,
@@ -69,27 +79,97 @@ spark.sparkContext.setLogLevel("WARN")
 # group-1-dbda (the team's real bucket) — deliberately kept separate so this
 # never touches shared/production data.
 
-BRONZE_SONG_PATH = "s3://spotify-lake-dev-data/bronze/charts_songs_daily/"
+DATA_BUCKET = "spotify-lake-dev-data"
+BRONZE_PREFIX = "bronze/charts_songs_daily/"
+BRONZE_SONG_PATH = f"s3://{DATA_BUCKET}/{BRONZE_PREFIX}"
 SILVER_SONG_PATH = "s3://spotify-lake-dev-data/silver/song_charts/"
 
 # =============================================================================
 # Read Bronze Layer
 # =============================================================================
 
+def get_latest_ingest_date():
+    """
+    Finds the most recent ingest_date=YYYY-MM-DD partition under Bronze.
+    Bronze holds one full-history snapshot per ingest date, so only the
+    latest one needs to be read.
+    """
+
+    s3 = boto3.client("s3")
+    paginator = s3.get_paginator("list_objects_v2")
+
+    ingest_dates = set()
+    for page in paginator.paginate(Bucket=DATA_BUCKET, Prefix=BRONZE_PREFIX, Delimiter="/"):
+        for common_prefix in page.get("CommonPrefixes", []):
+            partition = common_prefix["Prefix"].rstrip("/").split("/")[-1]
+            if partition.startswith("ingest_date="):
+                ingest_dates.add(partition.split("=", 1)[1])
+
+    if not ingest_dates:
+        raise FileNotFoundError(f"No ingest_date partitions found under s3://{DATA_BUCKET}/{BRONZE_PREFIX}")
+
+    return max(ingest_dates)
+
+
 def read_bronze():
     """
-    Reads the Bronze charts_songs_daily dataset from S3.
+    Reads the latest raw Bronze charts_songs_daily CSV snapshot from S3.
     """
 
-    logger.info("Reading Bronze dataset...")
+    latest_ingest_date = get_latest_ingest_date()
+    bronze_path = f"{BRONZE_SONG_PATH}ingest_date={latest_ingest_date}/"
 
-    bronze_song_charts = spark.read.parquet(
-        BRONZE_SONG_PATH
+    logger.info("Reading Bronze snapshot: %s", bronze_path)
+
+    bronze_song_charts = (
+        spark.read
+        .option("header", "true")
+        .option("inferSchema", "true")
+        .csv(bronze_path)
     )
 
     logger.info("Bronze dataset loaded successfully.")
 
     return bronze_song_charts
+
+# =============================================================================
+# Incremental Filtering
+# =============================================================================
+
+def get_last_processed_date():
+    """
+    Returns the max `date` already written to Silver, or None if Silver
+    doesn't exist yet (first run).
+    """
+
+    s3 = boto3.client("s3")
+    silver_prefix = SILVER_SONG_PATH.replace(f"s3://{DATA_BUCKET}/", "")
+    response = s3.list_objects_v2(Bucket=DATA_BUCKET, Prefix=silver_prefix, MaxKeys=1)
+
+    if response.get("KeyCount", 0) == 0:
+        logger.info("No existing Silver data found — this is the first run.")
+        return None
+
+    last_date = (
+        spark.read.parquet(SILVER_SONG_PATH)
+        .agg(spark_max("date"))
+        .collect()[0][0]
+    )
+    logger.info("Last processed date in Silver: %s", last_date)
+    return last_date
+
+
+def filter_new_rows(bronze_song_charts, last_processed_date):
+    """
+    Keeps only rows newer than what's already in Silver.
+    """
+
+    if last_processed_date is None:
+        logger.info("Processing full Bronze snapshot (no prior Silver data).")
+        return bronze_song_charts
+
+    logger.info("Incremental load: keeping rows with date > %s", last_processed_date)
+    return bronze_song_charts.filter(col("date") > lit(last_processed_date))
 
 COUNTRY_MAPPING = {
     "ad": "Andorra",
@@ -342,10 +422,13 @@ def feature_engineering(silver_song_charts):
 
 def write_song_charts(silver_song_charts):
     """
-    Writes the Silver Song Charts dataset to Amazon S3.
+    Appends the new Silver Song Charts rows to Amazon S3. Append (not
+    overwrite) because the incoming DataFrame only contains the
+    incremental delta — overwriting would wipe out already-processed
+    months that aren't part of this run's data.
     """
 
-    logger.info("Writing Silver Song Charts...")
+    logger.info("Writing Silver Song Charts (incremental append)...")
 
     (
         silver_song_charts
@@ -355,7 +438,7 @@ def write_song_charts(silver_song_charts):
             "month"
         )
         .write
-        .mode("overwrite")
+        .mode("append")
         .partitionBy(
             "year",
             "month"
@@ -376,10 +459,17 @@ def main():
     logger.info("Spotify Silver ETL Started")
     logger.info("=" * 80)
 
+    last_processed_date = get_last_processed_date()
+
     bronze_song_charts = read_bronze()
-    silver_song_charts = clean_song_charts(bronze_song_charts)
-    silver_song_charts = feature_engineering(silver_song_charts)
-    write_song_charts(silver_song_charts)
+    bronze_song_charts = filter_new_rows(bronze_song_charts, last_processed_date)
+
+    if bronze_song_charts.isEmpty():
+        logger.info("No new rows to process — Silver is already up to date.")
+    else:
+        silver_song_charts = clean_song_charts(bronze_song_charts)
+        silver_song_charts = feature_engineering(silver_song_charts)
+        write_song_charts(silver_song_charts)
 
     logger.info("=" * 80)
     logger.info("Spotify Silver ETL Completed Successfully")

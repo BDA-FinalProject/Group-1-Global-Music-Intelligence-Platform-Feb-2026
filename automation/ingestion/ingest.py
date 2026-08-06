@@ -2,10 +2,11 @@
 """Download one file from a Kaggle dataset and land it in the bronze layer.
 
 Reads Kaggle credentials from SSM at runtime, downloads the target file,
-converts it to Parquet in bounded-memory chunks (the source file can be
-several GB decompressed), and uploads both the raw file and the Parquet
-output to S3 under bronze/. Idempotent: re-running for the same
---ingest-date overwrites the same dated partition rather than duplicating.
+and uploads it as-is (raw CSV, no format conversion) to S3 under bronze/.
+Bronze stays a faithful copy of the source — Parquet conversion and any
+cleaning happen downstream in the Silver Glue job. Idempotent: re-running
+for the same --ingest-date overwrites the same dated partition rather than
+duplicating.
 """
 import argparse
 import json
@@ -19,9 +20,6 @@ from datetime import date
 from pathlib import Path
 
 import boto3
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,8 +27,6 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 log = logging.getLogger("ingest")
-
-CHUNK_SIZE = 250_000
 
 
 def parse_args():
@@ -98,28 +94,6 @@ def download_target_file(kaggle_slug, target_file, work_dir):
     return downloaded
 
 
-def csv_to_parquet_chunked(csv_path, parquet_path, compression):
-    """Streams CSV -> Parquet in bounded chunks so memory use doesn't scale
-    with file size (source files here run 8-10GB decompressed)."""
-    log.info("converting %s -> %s (chunked, %d rows/chunk)", csv_path, parquet_path, CHUNK_SIZE)
-    writer = None
-    total_rows = 0
-    try:
-        reader = pd.read_csv(csv_path, compression=compression, chunksize=CHUNK_SIZE)
-        for i, chunk in enumerate(reader):
-            table = pa.Table.from_pandas(chunk, preserve_index=False)
-            if writer is None:
-                writer = pq.ParquetWriter(parquet_path, table.schema, compression="snappy")
-            writer.write_table(table)
-            total_rows += len(chunk)
-            log.info("chunk %d: %d rows written (total %d)", i, len(chunk), total_rows)
-    finally:
-        if writer is not None:
-            writer.close()
-    log.info("conversion complete: %d total rows", total_rows)
-    return total_rows
-
-
 def upload_file(s3, bucket, local_path, key):
     log.info("uploading %s -> s3://%s/%s", local_path, bucket, key)
     s3.upload_file(str(local_path), bucket, key)
@@ -136,19 +110,12 @@ def main():
     write_kaggle_credentials(ssm, args.kaggle_username_param, args.kaggle_key_param)
     csv_path = download_target_file(args.kaggle_slug, args.target_file, work_dir)
 
-    compression = "gzip" if csv_path.suffix == ".gz" else None
-    parquet_path = work_dir / f"{args.table_name}.parquet"
-    csv_to_parquet_chunked(csv_path, parquet_path, compression)
-
-    raw_key = f"bronze/_raw/{args.table_name}/ingest_date={args.ingest_date}/{csv_path.name}"
-    parquet_key = f"bronze/{args.table_name}/ingest_date={args.ingest_date}/{args.table_name}.parquet"
-
+    raw_key = f"bronze/{args.table_name}/ingest_date={args.ingest_date}/{csv_path.name}"
     upload_file(s3, args.data_bucket, csv_path, raw_key)
-    upload_file(s3, args.data_bucket, parquet_path, parquet_key)
 
     log.info(
-        "ingestion complete: raw=s3://%s/%s parquet=s3://%s/%s",
-        args.data_bucket, raw_key, args.data_bucket, parquet_key,
+        "ingestion complete: raw=s3://%s/%s",
+        args.data_bucket, raw_key,
     )
 
 

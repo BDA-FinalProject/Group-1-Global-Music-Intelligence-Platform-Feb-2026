@@ -29,8 +29,8 @@ S3 silver/song_charts/ (Parquet, partitioned by year/month)
         │  market share, catalog hit rate)
         ▼
 S3 gold/ — 5 business-ready tables:
-        dashboard_summary, country_performance, monthly_trends,
-        label_performance, artist_performance
+        kpi_song, kpi_artist, country_performance, monthly_trends,
+        label_performance_enhanced
 ```
 
 Everything that provisions this — the S3 buckets, the EC2 instance, the
@@ -46,7 +46,7 @@ and repeatable instead of one-off console setup.
 | `automation/terraform/envs/dev/` | Root module — wires everything together, one `apply` builds the whole stack |
 | `automation/ingestion/ingest.py` | The ingestion script that runs on the EC2 instance (bronze) |
 | `automation/glue_jobs/silver_song_charts.py` | PySpark job: bronze → silver (cleaning, country names, hit-category/chart-strength features) |
-| `automation/glue_jobs/gold_layer_etl.py` | PySpark job: silver → 5 gold tables (dashboard/country/monthly/label/artist) |
+| `automation/glue_jobs/gold_layer_etl.py` | PySpark job: silver → 5 gold tables (kpi_song/kpi_artist/country/monthly/label) |
 | `automation/terraform-ci.sh` | fmt/init/validate/plan/apply, identical in CI and local runs |
 | `.github/workflows/terraform.yml` | GitHub Actions entrypoint — PR gets `plan`, merge to `main` gets `apply`, authenticated via OIDC (no AWS keys stored in GitHub) |
 | `automation/README.md` | Technical reference: layout, sandbox-account toggles, bugs hit and fixed |
@@ -103,6 +103,13 @@ account end to end:
    tables, spot-checked (`active_artists` counts are real, non-null;
    `dashboard_summary` and `monthly_trends` agree on their overlapping
    columns).
+
+   The gold schema described above (`kpi_song` / `kpi_artist`) is a
+   later revision of what this run produced — that run wrote
+   `dashboard_summary` and `artist_performance` instead, which the
+   current script no longer generates. Old prefixes under `gold/` from
+   that run aren't cleaned up automatically and need a manual
+   `aws s3 rm --recursive` once the new schema is confirmed good.
 
 ## Where to go next
 
