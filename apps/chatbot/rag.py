@@ -213,20 +213,33 @@ def _top1_distance(query_embedding, chunks):
 # generation is skipped entirely rather than risking a confidently-wrong
 # answer.
 #
-# Threshold chosen from live distance values measured across this project's
-# gold_chunks: a confirmed-correct, exact-name-routed match sits ~0.86-1.04;
-# a confirmed out-of-scope query sits ~1.157-1.171. 1.10 sits between them.
+# Threshold re-measured against the current (spotify-lake-dev-data-sourced)
+# gold_chunks: a confirmed out-of-scope query ("what is the weather like
+# today?", "tell me a joke") sits ~1.21-1.26. Vague/no-entity-keyword
+# questions that coincidentally match a label whose name shares words with
+# the query (e.g. "tell me about the global streaming trend" nearest-
+# matching a label called "Trending Now") sit ~0.98-1.0 — tightened from
+# 1.10 to 0.95 to catch this class without the confidence gate ever
+# applying to a real entity-routed match (classify_query() sets
+# source_table for those, so the gate is skipped entirely; see below).
+#
+# NOT fully solved by this threshold: some coincidental label-name matches
+# sit as low as ~0.87 (e.g. "total streams of all years??" nearest-matching
+# a label literally named "17 Earth Years") — indistinguishable by distance
+# alone from a legitimate match (a correctly-routed India query sits at
+# ~0.88). Fixing that class would need an entity-plausibility check beyond
+# distance, not attempted here.
 #
 # Deliberately scoped to source_table is None only, not applied globally:
 # baseline_before.json showed an exact-name-routed case ("how is india
 # doing", lowercase, routed to country_performance via classify_query()'s
 # country-name match, top-1 distance 1.1856) that is CORRECT despite
-# exceeding 1.10 — informal phrasing measurably increases embedding
-# distance even for a right answer. Gating on distance alone for that case
-# would suppress a good answer, so the gate only fires when classify_query()
-# also failed to find an entity-name/keyword match — i.e. when there is no
-# other signal of relevance to fall back on.
-NO_MATCH_DISTANCE_THRESHOLD = 1.10
+# exceeding this threshold — informal phrasing measurably increases
+# embedding distance even for a right answer. Gating on distance alone for
+# that case would suppress a good answer, so the gate only fires when
+# classify_query() also failed to find an entity-name/keyword match — i.e.
+# when there is no other signal of relevance to fall back on.
+NO_MATCH_DISTANCE_THRESHOLD = 0.95
 NO_DATA_REPLY = "I don't have data to answer that."
 
 
@@ -456,6 +469,9 @@ def _call_ollama(messages):
     return response.json()['message']['content']
 
 
+_UNSUPPORTED_ENTITY_KEYWORDS = ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians']
+
+
 def get_rag_reply(question):
     # 1. SQL router — MAX/COUNT/AVG/trend questions have a deterministic
     # answer no top-k vector search can provide (see detect_sql_intent()
@@ -472,6 +488,20 @@ def get_rag_reply(question):
         prompt = build_sql_prompt(question, rows, description)
         reply_text = _call_llm(prompt)
         return {'reply': reply_text, 'sources': [description]}
+
+    # 1b. Artist-specific questions that aren't a count (count already
+    # returned above via kpi_artist's COUNT-only path) have no answer in
+    # this Gold source — kpi_artist carries no metric columns, so there is
+    # no artist_performance-equivalent chunk table to retrieve from.
+    # Without this check, these fall through to an unfiltered vector search
+    # across country/label/track chunks and can land on a label whose name
+    # happens to read like an artist's (e.g. "Martin Arteta", "Artiste
+    # First"), producing a confusing or misleading answer instead of an
+    # honest "no data". Checked here, before vector retrieval, so it never
+    # reaches that fallback.
+    lowered_question = question.lower()
+    if any(kw in lowered_question for kw in _UNSUPPORTED_ENTITY_KEYWORDS):
+        return {'reply': NO_DATA_REPLY, 'sources': []}
 
     # 2. Multi-country comparison — a single shared top-k lets whichever
     # country is semantically nearest crowd out the other(s) entirely (see
