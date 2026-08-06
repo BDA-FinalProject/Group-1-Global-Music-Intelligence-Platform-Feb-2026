@@ -12,6 +12,8 @@ import re
 import requests
 from django.db import connections
 
+from . import cache
+
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.2:3b')
 
@@ -29,7 +31,10 @@ GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 # specifically to route around Groq's daily quota, not as a fallback for
 # when Groq is down.
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
+# gemini-2.0-flash returned 429 with "limit: 0" for this project's free
+# tier -- not a transient rate limit, that model's quota was zero.
+# gemini-flash-latest works, so it's the default rather than 2.0-flash.
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-flash-latest')
 GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
 
 # Named constant, not inline, so the request target swaps without touching
@@ -605,19 +610,61 @@ def build_sql_prompt(question, rows, description):
     return f"Context (computed directly from the database, {description}):\n{lines}\n\nQuestion: {question}"
 
 
+class ProviderBudgetExceeded(Exception):
+    """Raised by _call_gemini()/_call_groq() when cache.is_over_budget()
+    says we're already at that provider's known free-tier limit -- lets
+    _call_llm() move on to the next provider instead of burning a real
+    request that would just 429 anyway."""
+
+
+class AllProvidersUnavailable(Exception):
+    """Raised by _call_llm() when every configured provider is either
+    unset or over budget. Distinct from a generic HTTPError/connection
+    failure so it's inspectable/loggable if this needs debugging later --
+    apps.chatbot.services.get_bot_reply()'s existing bare `except
+    Exception` still catches it the same as any other failure, no change
+    needed there."""
+
+
 def _call_llm(prompt, system_prompt=None):
     messages = [
         {'role': 'system', 'content': system_prompt or SYSTEM_PROMPT},
         {'role': 'user', 'content': prompt},
     ]
     if GEMINI_API_KEY:
-        return _call_gemini(messages)
+        try:
+            return _call_gemini(messages)
+        except ProviderBudgetExceeded:
+            pass
+        except requests.exceptions.HTTPError as e:
+            # A real 429 despite our own budget tracking saying we were
+            # fine -- can happen right after a fresh Redis flush, or the
+            # first time a limit is hit before enough usage was recorded
+            # to trip our conservative threshold. Same recovery as
+            # ProviderBudgetExceeded: try the next provider rather than
+            # letting this become a hard failure.
+            if e.response is not None and e.response.status_code == 429:
+                cache.mark_exhausted('gemini')
+            else:
+                raise
     if GROQ_API_KEY:
-        return _call_groq(messages)
+        try:
+            return _call_groq(messages)
+        except ProviderBudgetExceeded:
+            pass
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                cache.mark_exhausted('groq')
+            else:
+                raise
+    if not OLLAMA_URL:
+        raise AllProvidersUnavailable('Gemini/Groq over budget or unset, and no Ollama URL configured')
     return _call_ollama(messages)
 
 
 def _call_gemini(messages):
+    if cache.is_over_budget('gemini'):
+        raise ProviderBudgetExceeded('gemini')
     response = requests.post(
         GEMINI_URL,
         headers={
@@ -640,10 +687,16 @@ def _call_gemini(messages):
         timeout=30,
     )
     response.raise_for_status()
+    # Gemini's free tier is request-rate limited (~20/min observed), not
+    # token-metered the way Groq's daily cap is -- so usage is tracked as
+    # a request count (1 per call), not tokens.
+    cache.record_usage('gemini', 1)
     return response.json()['choices'][0]['message']['content']
 
 
 def _call_groq(messages):
+    if cache.is_over_budget('groq'):
+        raise ProviderBudgetExceeded('groq')
     response = requests.post(
         GROQ_URL,
         headers={
@@ -659,7 +712,12 @@ def _call_groq(messages):
         timeout=30,
     )
     response.raise_for_status()
-    return response.json()['choices'][0]['message']['content']
+    data = response.json()
+    # Groq's free tier is a tokens-per-day cap (100K observed) -- tracked
+    # from the actual usage the API reports for this call, not estimated.
+    total_tokens = data.get('usage', {}).get('total_tokens', 0)
+    cache.record_usage('groq', total_tokens)
+    return data['choices'][0]['message']['content']
 
 
 def _call_ollama(messages):
@@ -723,6 +781,22 @@ def _condense_question(question, history):
 
 
 def get_rag_reply(question, history=None):
+    """Public entry point — checks the Redis-backed response cache (see
+    apps.chatbot.cache) keyed on the ORIGINAL incoming question+history,
+    before any follow-up condensation runs, so a cache hit skips
+    condensation, retrieval, AND generation entirely. Falls through to
+    _get_rag_reply_uncached() on a miss (or if Redis is unreachable —
+    cache.get_cached_reply() fails open), then caches whatever that
+    returns."""
+    cached = cache.get_cached_reply(question, history)
+    if cached is not None:
+        return cached
+    result = _get_rag_reply_uncached(question, history)
+    cache.set_cached_reply(question, history, result)
+    return result
+
+
+def _get_rag_reply_uncached(question, history=None):
     # 0. Follow-up resolution — if there's conversation history, rewrite
     # the question into a standalone one before any routing runs (see
     # _condense_question()). Skipped entirely for a fresh conversation

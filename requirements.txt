@@ -9,3 +9,4 @@ sentence-transformers==5.6.1
 pyarrow==25.0.0
 pandas==3.0.5
 requests==2.34.2
+redis==8.1.0
