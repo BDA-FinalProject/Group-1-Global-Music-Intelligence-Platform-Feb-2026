@@ -112,3 +112,103 @@ repo-root path, they can't be nested.
   are all `automation/terraform/envs/dev/variables.tf` defaults — override via
   `-var` or a `.tfvars` file if you need to change them without editing
   code.
+
+## Day-to-day operations (once the stack is already deployed)
+
+You don't need to re-apply Terraform for routine use — infra only changes
+when the `.tf` files do. This section covers running the pipeline itself:
+pulling new Kaggle data, transforming it, and cleaning up afterward.
+
+### Run ingestion (Kaggle -> Bronze)
+
+`ingest.py` is not baked into the EC2 instance's boot image — it has to be
+uploaded to S3 and pulled onto the box fresh each time you want to run the
+latest version of it.
+
+```bash
+# Always run this from the repo root — a relative path from the wrong
+# directory will silently upload some other file that happens to exist
+# at that path instead of erroring.
+cd /path/to/spotify-lake-infra
+aws s3 cp automation/ingestion/ingest.py s3://spotify-lake-dev-glue-assets/scripts/ingest.py
+
+# Use an interactive session, not send-command — far easier to see errors
+# live instead of round-tripping through get-command-invocation each time.
+aws ssm start-session --region us-east-1 --target <instance-id>
+```
+
+On the instance:
+
+```bash
+sudo -i    # root login shell — /etc/profile.d/ingestion-env.sh auto-sources here
+
+python3 -c "import boto3; boto3.client('s3', region_name='us-east-1').download_file('spotify-lake-dev-glue-assets', 'scripts/ingest.py', '/opt/ingest.py')"
+
+python3 /opt/ingest.py --work-dir /opt/ingest/work --target-file charts_songs_daily.csv
+```
+
+**Known gotchas (hit during real runs, worth knowing before you hit them again):**
+
+- **Don't prefix commands with `sudo` once you're already in a `sudo -i`
+  root shell.** `sudo` resets the environment by default even when you're
+  already root, which wipes out the Kaggle/bucket env vars that were
+  sourced from `/etc/profile.d/ingestion-env.sh` — `ingest.py` then fails
+  with "missing required config" even though the vars are visibly set in
+  your shell.
+- **Always pass `--target-file charts_songs_daily.csv` explicitly.** The
+  `$TARGET_FILE` env var baked into this instance at launch time is stale
+  (`charts_songs_daily.csv.gz`, which 404s — Kaggle serves this file
+  uncompressed). The instance's `/etc/profile.d/ingestion-env.sh` only
+  reflects whatever `target_file` value was current in Terraform *at the
+  moment the instance was launched*; changing the variable later and
+  re-applying does not retroactively update it on an already-running box.
+- **Use `--work-dir /opt/ingest/work`, never the default `/tmp`.** On
+  Amazon Linux 2023, `/tmp` is RAM-backed (tmpfs) and too small for a
+  ~10GB download.
+- If your local AWS CLI's default region isn't `us-east-1`, **pass
+  `--region us-east-1` explicitly** on every `aws ssm` / `aws glue`
+  command — the ingestion instance and both Glue jobs live there
+  regardless of what your shell's default region is set to.
+
+### Run the transform jobs (Bronze -> Silver -> Gold)
+
+```bash
+aws glue start-job-run --region us-east-1 --job-name spotify-lake-dev-silver-song-charts
+# wait for it to succeed, then:
+aws glue start-job-run --region us-east-1 --job-name spotify-lake-dev-gold-layer
+```
+
+Run Silver before Gold — Gold reads the full Silver dataset, so it needs
+Silver's latest output to exist first. Silver itself is incremental: it
+auto-detects the newest Bronze `ingest_date` partition and only processes
+rows newer than what's already in Silver, so it's cheap to re-run.
+
+Check status:
+```bash
+aws glue get-job-runs --region us-east-1 --job-name <job-name> --max-results 3
+```
+
+### Verify
+
+```bash
+aws s3 ls s3://spotify-lake-dev-data/bronze/charts_songs_daily/ --recursive --human-readable
+aws s3 ls s3://spotify-lake-dev-data/silver/song_charts/ --recursive --summarize
+aws s3 ls s3://spotify-lake-dev-data/gold/ --recursive --summarize
+
+cd automation/terraform/envs/dev && terraform plan   # "No changes" = infra matches code, no drift
+```
+
+### Clean up (stop paying for the EC2 instance)
+
+The ingestion EC2 instance only needs to exist while ingestion is
+actually running — tear it down afterward:
+
+```bash
+cd automation/terraform/envs/dev
+terraform destroy -target=module.ec2_ingestion
+```
+
+This only removes the EC2 instance and its security group — the S3
+buckets and all data in them are untouched. Run `terraform apply` again
+next time you need to ingest; it recreates the instance from scratch in
+under a minute.
