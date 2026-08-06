@@ -49,7 +49,7 @@ scripts/build_gold_chunks.py       Gold tables ──▶ yearly chunks ──▶
 | DB | PostgreSQL 17 |
 | Vector search | pgvector, `ivfflat` index |
 | Embeddings | `all-MiniLM-L6-v2` (local) |
-| LLM | Groq `llama-3.3-70b-versatile` (falls back to local Ollama) |
+| LLM | Gemini `gemini-flash-latest` (falls back to Groq `llama-3.3-70b-versatile`, then local Ollama) |
 | Backend | Django 6 + DRF |
 | Hosting | AWS EC2 `m5.large`, Nginx + Gunicorn |
 
@@ -315,7 +315,7 @@ python3 scripts/build_gold_chunks.py
 python3 scripts/rag_baseline_probe.py output.json
 ```
 
-No `GROQ_API_KEY` → falls back to local Ollama (`OLLAMA_URL`, default `http://localhost:11434`, model `llama3.2:3b`).
+Provider priority: `GEMINI_API_KEY` set → Gemini; else `GROQ_API_KEY` set → Groq; else local Ollama (`OLLAMA_URL`, default `http://localhost:11434`, model `llama3.2:3b`). Gemini was added after Groq's free-tier 100K-tokens/day cap was repeatedly exhausted during testing — see `.env.example` for the `gemini-flash-latest` note about its "thinking" tokens needing a higher `max_tokens` budget.
 
 ---
 

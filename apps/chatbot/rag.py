@@ -1,9 +1,10 @@
 """
 RAG pipeline: embed the question, retrieve nearest gold_chunks via pgvector,
-assemble a grounded prompt, generate an answer via an LLM. Uses Groq
-(GROQ_API_KEY env var) when set, otherwise falls back to a local Ollama
-model — see _call_llm() for the provider switch, get_rag_reply() for the
-overall pipeline.
+assemble a grounded prompt, generate an answer via an LLM. Provider
+priority in _call_llm(): Gemini (GEMINI_API_KEY) > Groq (GROQ_API_KEY) >
+local Ollama. Gemini was added after Groq's free-tier 100K-tokens/day cap
+was repeatedly exhausted during testing/normal use — see get_rag_reply()
+for the overall pipeline.
 """
 import os
 import re
@@ -21,6 +22,15 @@ OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.2:3b')
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
 GROQ_MODEL = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
 GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
+
+# Gemini via Google's OpenAI-compatible endpoint — same messages format as
+# Groq/OpenAI, so _call_gemini() is nearly identical to _call_groq(). Takes
+# priority over Groq in _call_llm() when set, since it was added
+# specifically to route around Groq's daily quota, not as a fallback for
+# when Groq is down.
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
+GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions'
 
 # Named constant, not inline, so the request target swaps without touching
 # call sites — deterministic output (temperature=0) is used throughout
@@ -600,9 +610,37 @@ def _call_llm(prompt):
         {'role': 'system', 'content': SYSTEM_PROMPT},
         {'role': 'user', 'content': prompt},
     ]
+    if GEMINI_API_KEY:
+        return _call_gemini(messages)
     if GROQ_API_KEY:
         return _call_groq(messages)
     return _call_ollama(messages)
+
+
+def _call_gemini(messages):
+    response = requests.post(
+        GEMINI_URL,
+        headers={
+            'Authorization': f'Bearer {GEMINI_API_KEY}',
+            'Content-Type': 'application/json',
+        },
+        json={
+            'model': GEMINI_MODEL,
+            'messages': messages,
+            'temperature': GENERATION_OPTIONS['temperature'],
+            # Higher than Groq/Ollama's 1024 -- gemini-flash-latest is a
+            # "thinking" model: its internal reasoning tokens are billed
+            # against max_tokens too (confirmed: a trivial "what is 2+2"
+            # prompt used ~89 reasoning tokens before the 1-token visible
+            # answer). 1024 was getting exhausted by reasoning alone on
+            # real prompts, truncating the response before any answer text
+            # came out (observed: garbled/empty replies).
+            'max_tokens': 4096,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()['choices'][0]['message']['content']
 
 
 def _call_groq(messages):
