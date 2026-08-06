@@ -11,6 +11,7 @@ Current Gold Tables
 3. Country Performance
 4. Monthly Trends
 5. Label Performance Enhanced
+6. Artist Performance
 
 Outputs
 -------
@@ -19,6 +20,7 @@ Outputs
 3. gold/country_performance
 4. gold/monthly_trends
 5. gold/label_performance_enhanced
+6. gold/artist_performance
 """
 
 # =============================================================================
@@ -51,7 +53,8 @@ from pyspark.sql.functions import (
     when,
     coalesce,
     create_map,
-    lit
+    first,
+    lit 
 
 )
 
@@ -121,6 +124,9 @@ GOLD_COUNTRY_PERFORMANCE_PATH = ("s3://group-1-dbda/gold/country_performance/")
 GOLD_MONTHLY_TRENDS_PATH = ("s3://group-1-dbda/gold/monthly_trends/")
 
 GOLD_LABEL_PERFORMANCE_PATH = ("s3://group-1-dbda/gold/label_performance_enhanced/")
+
+GOLD_ARTIST_PERFORMANCE_PATH = ("s3://group-1-dbda/gold/artist_performance/")
+
 
 # =============================================================================
 # Read Silver Song Charts
@@ -1078,6 +1084,153 @@ def write_label_performance_enhanced(label_performance_enhanced):
 
     logger.info("Label Performance Enhanced dataset written successfully.")
 
+# =============================================================================
+# Create Artist Performance
+# =============================================================================
+
+def create_artist_performance(silver_song_charts):
+    """
+    Creates the Gold Artist Performance dataset.
+    """
+
+    logger.info("Creating Artist Performance dataset...")
+
+    # --------------------------------------------------------
+    # Explode Artists
+    # --------------------------------------------------------
+
+    artist_data = (
+        silver_song_charts
+        .select(
+            "year",
+            "month",
+            "country_name",
+            "uri",
+            "streams",
+            "chart_strength_score",
+            "hit_category",
+            "artist_uris",
+            "artist_names"
+        )
+        .withColumn(
+            "artist",
+            explode(
+                arrays_zip(
+                    split(col("artist_uris"), "\\|"),
+                    split(col("artist_names"), "\\|")
+                )
+            )
+        )
+        .withColumn(
+            "artist_uri",
+            trim(col("artist.0"))
+        )
+        .withColumn(
+            "artist_name",
+            trim(col("artist.1"))
+        )
+        .drop(
+            "artist",
+            "artist_uris",
+            "artist_names"
+        )
+        .filter(
+            (col("artist_uri").isNotNull()) &
+            (trim(col("artist_uri")) != "") &
+            (col("artist_name").isNotNull()) &
+            (trim(col("artist_name")) != "") &
+            (trim(col("artist_name")) != "Unknown Artist")
+        )
+    )
+
+    # --------------------------------------------------------
+    # Artist Performance
+    # --------------------------------------------------------
+
+    artist_performance = (
+        artist_data
+        .groupBy(
+            "year",
+            "month",
+            "country_name",
+            "artist_uri"
+        )
+        .agg(
+            first(
+                "artist_name",
+                ignorenulls=True
+            ).alias(
+                "artist_name"
+            ),
+            round(
+                sum("streams"),
+                0
+            ).alias(
+                "total_streams"
+            ),
+            countDistinct(
+                "uri"
+            ).alias(
+                "active_songs"
+            ),
+            countDistinct(
+                when(
+                    col("hit_category").isin(
+                        "Global Hit",
+                        "Major Hit"
+                    ),
+                    col("uri")
+                )
+            ).alias(
+                "hit_songs"
+            ),
+            round(
+                avg(
+                    "chart_strength_score"
+                ),
+                2
+            ).alias(
+                "avg_chart_strength"
+            )
+        )
+    )
+    logger.info("Artist Performance dataset created successfully.")
+    return artist_performance
+
+# =============================================================================
+# Write Artist Performance
+# =============================================================================
+
+def write_artist_performance(artist_performance):
+    """
+    Writes the Gold Artist Performance dataset to Amazon S3.
+    """
+
+    logger.info("Writing Artist Performance dataset...")
+    (
+        artist_performance
+        .repartition(
+            20,
+            "year"
+        )
+        .write
+        .mode(
+            "overwrite"
+        )
+        .option(
+            "compression",
+            "snappy"
+        )
+        .partitionBy(
+            "year"
+        )
+        .parquet(
+            GOLD_ARTIST_PERFORMANCE_PATH
+        )
+    )
+    logger.info("Artist Performance dataset written successfully.")
+
+
 
 # =============================================================================
 # Main ETL Pipeline
@@ -1133,6 +1286,13 @@ def main():
 
     label_performance_enhanced = (create_label_performance_enhanced(silver_song_charts))
     write_label_performance_enhanced(label_performance_enhanced)
+
+    # --------------------------------------------------------
+    # Artist Performance
+    # --------------------------------------------------------
+
+    artist_performance = create_artist_performance(silver_song_charts)
+    write_artist_performance(artist_performance)
 
     silver_song_charts.unpersist()
 
