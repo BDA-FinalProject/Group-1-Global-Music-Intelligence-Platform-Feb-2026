@@ -17,10 +17,12 @@ _CANNED_REPLIES = [
 ]
 
 
-def get_bot_reply(user_message):
+def get_bot_reply(user_message, history=None):
     """Returns {'reply': str, 'sources': list[str]}. Falls back to the
-    canned demo reply (no sources) if the RAG pipeline / Ollama is down."""
+    canned demo reply (no sources) if the RAG pipeline / Ollama is down.
+    history (optional) is client-side conversation memory — see
+    apps.chatbot.rag.get_rag_reply()'s history param."""
     try:
-        return rag.get_rag_reply(user_message)
+        return rag.get_rag_reply(user_message, history=history)
     except Exception:
         return {'reply': random.choice(_CANNED_REPLIES), 'sources': []}

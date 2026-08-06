@@ -6,14 +6,26 @@
  * reply from apps/chatbot/services.py::get_bot_reply(). Swapping in a
  * real RAG/LLM backend only requires changing that function — this file
  * and the request/response contract stay the same.
+ *
+ * Conversation memory: conversationHistory tracks this tab's exchanges
+ * only (no server-side session/DB — see apps.chatbot.rag.
+ * _condense_question()'s docstring for why) and is sent with every
+ * request so the backend can resolve follow-ups like "what about 2024?".
+ * A page refresh starts a fresh conversation by design.
  */
 (function () {
   const CHAT_ENDPOINT = '/api/v1/chatbot/messages/';
+  // Last N messages sent as history — bounds the condensation prompt's
+  // size server-side regardless of how long a session runs (rag.py also
+  // caps to the last 4 independently; this is the client-side half of
+  // that same bound).
+  const MAX_HISTORY_MESSAGES = 6;
 
   const form = document.getElementById('chatForm');
   const input = document.getElementById('chatInput');
   const messages = document.getElementById('chatMessages');
   const csrfToken = document.getElementById('csrfTokenInput').value;
+  const conversationHistory = [];
 
   function scrollToBottom() {
     messages.scrollTop = messages.scrollHeight;
@@ -91,7 +103,10 @@
         'Content-Type': 'application/json',
         'X-CSRFToken': csrfToken,
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({
+        message,
+        history: conversationHistory.slice(-MAX_HISTORY_MESSAGES),
+      }),
     });
     if (!response.ok) {
       throw new Error(`Chat request failed with status ${response.status}`);
@@ -114,6 +129,11 @@
       const { reply, sources } = await sendMessage(message);
       hideTypingIndicator();
       appendMessage(reply, 'bot', sources);
+      // Plain text only (not rendered HTML) — this feeds a later
+      // condensation prompt server-side, which shouldn't have to fight
+      // with markdown syntax to understand what was said.
+      conversationHistory.push({ role: 'user', content: message });
+      conversationHistory.push({ role: 'assistant', content: reply });
     } catch (error) {
       hideTypingIndicator();
       appendMessage('Sorry, something went wrong. Please try again.', 'bot');

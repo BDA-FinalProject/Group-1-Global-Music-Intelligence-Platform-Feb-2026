@@ -22,7 +22,10 @@ class ChatMessageView(APIView):
         request_serializer = ChatMessageRequestSerializer(data=request.data)
         request_serializer.is_valid(raise_exception=True)
 
-        result = services.get_bot_reply(request_serializer.validated_data['message'])
+        result = services.get_bot_reply(
+            request_serializer.validated_data['message'],
+            history=request_serializer.validated_data['history'],
+        )
 
         response_serializer = ChatMessageResponseSerializer(result)
         return Response(response_serializer.data)

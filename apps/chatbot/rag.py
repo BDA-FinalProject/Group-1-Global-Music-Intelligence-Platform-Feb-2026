@@ -605,9 +605,9 @@ def build_sql_prompt(question, rows, description):
     return f"Context (computed directly from the database, {description}):\n{lines}\n\nQuestion: {question}"
 
 
-def _call_llm(prompt):
+def _call_llm(prompt, system_prompt=None):
     messages = [
-        {'role': 'system', 'content': SYSTEM_PROMPT},
+        {'role': 'system', 'content': system_prompt or SYSTEM_PROMPT},
         {'role': 'user', 'content': prompt},
     ]
     if GEMINI_API_KEY:
@@ -677,7 +677,60 @@ def _call_ollama(messages):
     return response.json()['message']['content']
 
 
-def get_rag_reply(question):
+# Deliberately a different, narrow system prompt from SYSTEM_PROMPT (the
+# markdown-formatted-answer one) — this call has exactly one job: rewrite,
+# not answer. Reusing SYSTEM_PROMPT here would have the model try to
+# format/cite/answer instead of just resolving the reference.
+_CONDENSE_SYSTEM_PROMPT = (
+    "Rewrite the latest user question into a fully self-contained question, "
+    "resolving any pronouns or implicit references (e.g. \"what about "
+    "2024\", \"and Brazil\", \"she\", \"that country\") using the "
+    "conversation history below. If the latest question is already "
+    "self-contained, return it unchanged. Return ONLY the rewritten "
+    "question — no explanation, no quotes, no extra text."
+)
+
+
+def _condense_question(question, history):
+    """Rewrites `question` into a standalone question using the last
+    couple of conversation turns, so every existing routing function
+    (classify_query(), detect_sql_intent(), detect_countries()/
+    detect_artists(), the confidence gate, etc.) keeps seeing the same
+    kind of fully-specified question it already handles — none of that
+    logic needs to know conversation history exists. Falls back to the
+    original question unchanged if the LLM call fails for any reason, so a
+    broken condensation step degrades to today's stateless per-message
+    behavior rather than breaking the reply entirely.
+
+    Only the last 4 turns (~2 exchanges) are included — enough for the
+    immediate follow-up case ("what about 2024?") this exists for, without
+    letting the prompt (and therefore token cost) grow unbounded over a
+    long conversation. The client also caps what it sends (see
+    chatbot.js), this is a second, independent bound server-side."""
+    recent = history[-4:]
+    transcript = "\n".join(f"{turn['role']}: {turn['content']}" for turn in recent)
+    prompt = (
+        f"Conversation so far:\n{transcript}\n\n"
+        f"Latest question: {question}\n\n"
+        "Rewritten, self-contained question:"
+    )
+    try:
+        rewritten = _call_llm(prompt, system_prompt=_CONDENSE_SYSTEM_PROMPT)
+        rewritten = rewritten.strip().strip('"')
+        return rewritten or question
+    except Exception:
+        return question
+
+
+def get_rag_reply(question, history=None):
+    # 0. Follow-up resolution — if there's conversation history, rewrite
+    # the question into a standalone one before any routing runs (see
+    # _condense_question()). Skipped entirely for a fresh conversation
+    # (history empty/None), so a first message costs exactly the one LLM
+    # call it always has.
+    if history:
+        question = _condense_question(question, history)
+
     # 1. SQL router — MAX/COUNT/AVG/trend questions have a deterministic
     # answer no top-k vector search can provide (see detect_sql_intent()
     # docstring). Checked first; falls through to normal retrieval below
