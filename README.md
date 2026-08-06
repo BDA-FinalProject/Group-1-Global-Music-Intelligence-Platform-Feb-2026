@@ -13,15 +13,21 @@ CDAC Big Data Engineering group project.
 │   AWS S3     │────▶│  PostgreSQL 17     │────▶│   Django (EC2, Nginx +     │
 │  Gold layer  │     │  + pgvector        │     │   Gunicorn)                 │
 │  (Parquet)   │     │                    │     │                              │
-└─────────────┘     │  ├─ artist_performance │  │  ┌─────────┐  ┌───────────┐ │
-                     │  ├─ country_performance│  │  │Dashboard │  │  Chatbot   │ │
-                     │  ├─ label_performance  │  │  └─────────┘  └───────────┘ │
-                     │  ├─ dashboard_summary  │  └──────────┬──────────────────┘
+└─────────────┘     │  ├─ country_performance│  │  ┌─────────┐  ┌───────────┐ │
+                     │  ├─ kpi_artist         │  │  │Dashboard │  │  Chatbot   │ │
+                     │  ├─ kpi_song           │  │  └─────────┘  └───────────┘ │
+                     │  ├─ label_performance_ │  └──────────┬──────────────────┘
+                     │  │   enhanced          │             │
                      │  ├─ monthly_trends     │             │
                      │  └─ gold_chunks (RAG)  │             ▼
                      └────────────────────────┘      Groq LLM API
                                                     (llama-3.3-70b)
 ```
+
+Source bucket: `s3://spotify-lake-dev-data/gold/` — country/artist/song/label/monthly-trend
+tables, all country-grain. `kpi_artist` is a country×artist×month presence table with no metric
+columns (no artist-level streams/active-songs exist in this source), so it's used only for
+entity-count SQL queries, never for RAG chunks or superlative/trend queries.
 
 ```
 scripts/load_gold_to_postgres.py   S3 Parquet ──▶ Postgres Gold tables
@@ -38,7 +44,7 @@ scripts/build_gold_chunks.py       Gold tables ──▶ yearly chunks ──▶
 | Embeddings | `all-MiniLM-L6-v2` (local) |
 | LLM | Groq `llama-3.3-70b-versatile` (falls back to local Ollama) |
 | Backend | Django 6 + DRF |
-| Hosting | AWS EC2 `t3.small`, Nginx + Gunicorn |
+| Hosting | AWS EC2 `m5.large`, Nginx + Gunicorn |
 
 More detail: [`RAG_ARCHITECTURE.md`](./RAG_ARCHITECTURE.md) · [`GOLD_LAYER_REPORT.md`](./GOLD_LAYER_REPORT.md) · [`GOLD_LAYER_LIVE_REPORT.md`](./GOLD_LAYER_LIVE_REPORT.md)
 
@@ -102,7 +108,8 @@ yearly rows
 chunk text  ──▶  all-MiniLM-L6-v2  ──▶  384-dim vector  ──▶  gold_chunks (pgvector)
 ```
 
-~215,725 chunks total (151,264 artist · 63,789 label · 672 country).
+~408,849 chunks total (344,323 track · 63,864 label · 662 country). No artist-level chunks —
+the source data has no artist metric columns (see architecture diagram above).
 
 ---
 
@@ -110,18 +117,17 @@ chunk text  ──▶  all-MiniLM-L6-v2  ──▶  384-dim vector  ──▶  g
 
 | Category | Example |
 |---|---|
-| Basic lookup | How did Kendrick Lamar perform in 2024? |
 | Basic lookup | How is India performing in music streaming? |
+| Basic lookup | How did Brazil perform in 2024? |
 | SQL-routed | Which country had the strongest streaming numbers? |
-| SQL-routed | Which artist grew the most in 2023? |
-| SQL-routed | How many countries are covered in the data? |
-| SQL-routed | How many labels are there in total? |
+| SQL-routed | Which label has the most streams? |
+| SQL-routed | How many artists are in the data? *(kpi_artist, count-only)* |
+| SQL-routed | How many tracks are there? |
 | Comparison | Compare India and Brazil's streaming performance. |
 | Comparison | Compare United States and Mexico's market share. |
 | Should refuse cleanly | What is the weather like today? |
 | Should refuse cleanly | Tell me a joke. |
-| Known rough edge | Compare Kendrick Lamar and Drake's streaming performance. |
-| Known rough edge | Tell me about Columbia Records. |
+| Known limitation | Who is the top artist by streams? *(no artist metrics in this source — degrades to "I don't have data")* |
 
 ---
 
@@ -142,10 +148,28 @@ Full details: [`IMPLEMENTATION_LOG.md`](./IMPLEMENTATION_LOG.md) · [`RAG_AUDIT.
 
 ---
 
+## Gold-layer source migration (`group-1-dbda` → `spotify-lake-dev-data`)
+
+The Gold source moved to a different S3 bucket with a materially different schema: no
+`artist_performance`, `label_performance`, or `dashboard_summary` tables, and no artist-level
+metric columns anywhere in the new source. Every layer that assumed the old schema was rewritten:
+`schema.sql`, `scripts/load_gold_to_postgres.py`, `scripts/build_gold_chunks.py`,
+`apps/gold_data/models.py` + `services.py`, `apps/chatbot/rag.py`'s table routing. See the
+architecture diagram and "Where `gold_chunks` comes from" above for the resulting shape.
+`kpi_artist` (country×artist×month presence, no metrics) only supports `COUNT(DISTINCT
+artist_uri)` — it's excluded from the RAG chunk build and from superlative/trend SQL routing,
+which would otherwise error on the missing `total_streams` column. The dashboard's KPI cards and
+"streams over time" chart, which used to read a pre-aggregated global `dashboard_summary`/
+`monthly_trends` table, are now computed as cross-country sums grouped by `(year, month)` — an
+approximation, since summing per-country `active_artists`/`active_songs` double-counts anyone
+active in more than one country that month.
+
+---
+
 ## AWS deployment
 
 ```
-┌────────────────────────────── EC2 (t3.small, ap-south-1) ───────────────────────────────┐
+┌────────────────────────────── EC2 (m5.large, us-east-1) ────────────────────────────────┐
 │                                                                                             │
 │   Internet ──▶ Nginx :80 ──▶ Gunicorn :8000 ──▶ Django ──▶ Postgres 17 + pgvector :5432   │
 │                                                       │                                     │
@@ -153,17 +177,21 @@ Full details: [`IMPLEMENTATION_LOG.md`](./IMPLEMENTATION_LOG.md) · [`RAG_AUDIT.
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Setup steps**: launch EC2 → install Postgres 17 + pgvector (compiled from source) → `pg_dump`/`pg_restore` Gold data from dev → deploy code via `rsync` → venv + `.env` (Groq key, DB URL) → Gunicorn as a systemd service → Nginx reverse proxy.
+**Setup steps**: launch EC2 → install Postgres 17 + pgvector (PGDG apt repo) → `aws s3 sync` Gold
+parquet onto the instance → deploy code via `rsync` → venv + `.env` (Groq key, DB URL) → apply
+`schema.sql` → `load_gold_to_postgres.py` → `build_gold_chunks.py` (embeddings) → Gunicorn as a
+systemd service → Nginx reverse proxy.
 
 **Issues hit along the way:**
 
 | Issue | Fix |
 |---|---|
 | Django 6 needs Python 3.12, Ubuntu 22.04 ships 3.10 | Installed 3.12 via deadsnakes PPA |
-| Ran out of disk installing PyTorch/sentence-transformers | EBS 8GB → 20GB, grew filesystem |
-| `t3.micro` ran out of CPU credits mid-setup, instance stopped responding | Resized to `t3.small` |
-| Dev Postgres was v17, server shipped an older version | Added official PGDG apt repo, installed Postgres 17 to match |
-| `ivfflat` index rebuilds with different clustering each time — dev-tuned `probes` didn't give full recall on the server's rebuild | Re-swept `probes` against the deployed index directly, compared against exact brute-force search |
+| `t3.small` (2GB RAM, no swap) OOM-killed `load_gold_to_postgres.py` loading the two largest tables (`kpi_artist` 1.9M rows, `kpi_song` 2.5M rows) into pandas | Added a 4GB swapfile as an immediate fix |
+| Resized to `t3.medium` for the embedding step (`build_gold_chunks.py`) — burstable CPU credits still throttled a sustained ~9-minute CPU-bound job to an estimated 3+ hour completion | Resized again to `m5.large` (non-burstable, consistent 2 vCPU) |
+| Embedding 408,849 chunks on the server was still slow even on `m5.large` (CPU-only, x86) | Ran `build_gold_chunks.py` locally instead (Apple M1, 8 cores) — 9 minutes vs 1.5+ hours — then `pg_dump`/`pg_restore` just the `gold_chunks` table onto the server |
+| Restoring the 750MB `gold_chunks` dump filled the 20GB root EBS volume | Grew the EBS volume to 40GB online (`modify-volume` + `growpart` + `resize2fs`, no downtime) |
+| `ivfflat` index built on an empty table (before data load) warned of low recall | Dropped and rebuilt it after loading, with `lists` sized to the real row count |
 
 ---
 

@@ -1,10 +1,14 @@
 """
-Aggregates artist_performance / country_performance / label_performance from
+Aggregates country_performance / label_performance_enhanced / kpi_song from
 monthly grain to yearly grain, generates one RAG chunk per (entity, year),
 embeds with all-MiniLM-L6-v2, and loads into gold_chunks.
 
-dashboard_summary and monthly_trends are intentionally excluded — they're
-single aggregate rows, not per-entity narrative material.
+kpi_artist is intentionally excluded — it has no metric columns (country x
+artist x month presence only), so there is no fact to narrate. monthly_trends
+is intentionally excluded too — it's a per-country-per-month aggregate used
+only for the dashboard's cross-country trend chart, not per-entity narrative
+material (same rationale the original dashboard_summary/monthly_trends
+exclusion used before this source's schema changed).
 
 Usage:
     python scripts/build_gold_chunks.py
@@ -27,104 +31,99 @@ PG_DSN = (
 
 # --- Yearly aggregation -----------------------------------------------
 
-def aggregate_artist_performance(conn):
-    df = pd.read_sql(
-        "SELECT year, artist_uri, artist_name, total_streams, active_songs, "
-        "countries_reached, catalog_hit_rate, avg_chart_strength "
-        "FROM artist_performance",
-        conn,
-    )
-    agg = df.groupby(['artist_uri', 'year']).agg(
-        artist_name=('artist_name', 'first'),
-        total_streams=('total_streams', 'sum'),      # sum: additive volume metric
-        active_songs=('active_songs', 'max'),         # max: catalog size, not additive across months
-        countries_reached=('countries_reached', 'max'),  # max: broadest reach seen that year
-        catalog_hit_rate=('catalog_hit_rate', 'mean'),    # mean: a rate, average across months
-        avg_chart_strength=('avg_chart_strength', 'mean'),  # mean: already an average metric
-    ).reset_index()
-    return agg
-
-
 def aggregate_country_performance(conn):
     df = pd.read_sql(
-        "SELECT year, country_name, total_streams, market_share, "
-        "growth_percentage, catalog_hit_rate, active_songs, active_artists, "
-        "active_labels, top_artist, top_label FROM country_performance",
+        "SELECT year, country_name, total_streams, active_songs, hit_songs, "
+        "avg_chart_strength, active_artists, growth_percentage, "
+        "top_song_name, top_artist_name FROM country_performance",
         conn,
     )
     agg = df.groupby(['country_name', 'year']).agg(
         total_streams=('total_streams', 'sum'),        # sum: additive volume
-        market_share=('market_share', 'mean'),          # mean: a share/percentage
-        growth_percentage=('growth_percentage', 'mean'),  # mean: a rate
-        catalog_hit_rate=('catalog_hit_rate', 'mean'),    # mean: a rate
         active_songs=('active_songs', 'max'),            # max: broadest catalog seen
+        hit_songs=('hit_songs', 'max'),                   # max: broadest hit-song count seen
+        avg_chart_strength=('avg_chart_strength', 'mean'),  # mean: already an average metric
         active_artists=('active_artists', 'max'),
-        active_labels=('active_labels', 'max'),
-        top_artist=('top_artist', 'last'),               # last: most recent month's leader
-        top_label=('top_label', 'last'),
+        growth_percentage=('growth_percentage', 'mean'),  # mean: a rate
+        top_song_name=('top_song_name', 'last'),           # last: most recent month's leader
+        top_artist_name=('top_artist_name', 'last'),
     ).reset_index()
     return agg
 
 
 def aggregate_label_performance(conn):
+    # Aggregated across countries too (not just months) -- the old
+    # label_performance table this replaces had no country_name column, so
+    # a yearly label chunk was always a global figure; label_performance_
+    # enhanced adds country_name, so it must be summed out here to keep the
+    # same global-per-label-per-year chunk semantics.
     df = pd.read_sql(
-        "SELECT year, standardized_label, total_streams, market_share, "
-        "catalog_hit_rate, active_songs, active_artists FROM label_performance",
+        "SELECT year, standardized_label, total_streams, active_songs, "
+        "active_artists FROM label_performance_enhanced",
         conn,
     )
     agg = df.groupby(['standardized_label', 'year']).agg(
         total_streams=('total_streams', 'sum'),      # sum: additive volume
-        market_share=('market_share', 'mean'),         # mean: a share/percentage
-        catalog_hit_rate=('catalog_hit_rate', 'mean'),  # mean: a rate
         active_songs=('active_songs', 'max'),
         active_artists=('active_artists', 'max'),
     ).reset_index()
     return agg
 
 
-# --- Chunk text templates (yearly framing) -----------------------------
-
-def artist_chunk(row):
-    return (
-        f"In {int(row['year'])}, artist {row['artist_name']} "
-        f"({row['artist_uri']}) had {int(row['total_streams']):,} total "
-        f"streams across up to {int(row['active_songs'])} active song(s), "
-        f"reaching up to {int(row['countries_reached'])} countries that "
-        f"year. Average catalog hit rate was {row['catalog_hit_rate']:.2f}%, "
-        f"average chart strength {row['avg_chart_strength']:.2f}."
+def aggregate_kpi_song(conn):
+    # Summed across country and month -- kpi_song is country x track x
+    # month grain; a yearly per-track chunk is the track's global total for
+    # that year.
+    df = pd.read_sql(
+        "SELECT year, uri, standardized_label, total_streams, is_hit FROM kpi_song",
+        conn,
     )
+    agg = df.groupby(['uri', 'year']).agg(
+        standardized_label=('standardized_label', 'first'),
+        total_streams=('total_streams', 'sum'),
+        is_hit=('is_hit', 'max'),   # hit in any country/month that year
+    ).reset_index()
+    return agg
 
+
+# --- Chunk text templates (yearly framing) -----------------------------
 
 def country_chunk(row):
     return (
         f"In {row['country_name']} during {int(row['year'])}, Spotify "
-        f"recorded {int(row['total_streams']):,} total streams "
-        f"(avg {row['market_share']:.2f}% market share, avg "
-        f"{row['growth_percentage']:.2f}% growth), with up to "
-        f"{int(row['active_songs'])} active song(s) and an average catalog "
-        f"hit rate of {row['catalog_hit_rate']:.2f}%. Up to "
-        f"{int(row['active_artists'])} active artists and "
-        f"{int(row['active_labels'])} active labels were represented that "
-        f"year. Most recent top artist was {row['top_artist']}, top label "
-        f"was {row['top_label']}."
+        f"recorded {int(row['total_streams']):,} total streams, with up to "
+        f"{int(row['active_songs'])} active song(s) (up to "
+        f"{int(row['hit_songs'])} of them hits) and an average chart "
+        f"strength of {row['avg_chart_strength']:.2f}. Up to "
+        f"{int(row['active_artists'])} active artists were represented "
+        f"that year, with average growth of {row['growth_percentage']:.2f}%. "
+        f"Most recent top song was {row['top_song_name']}, top artist was "
+        f"{row['top_artist_name']}."
     )
 
 
 def label_chunk(row):
     return (
         f"Label {row['standardized_label']} in {int(row['year'])} had "
-        f"{int(row['total_streams']):,} total streams (avg "
-        f"{row['market_share']:.2f}% market share) across up to "
+        f"{int(row['total_streams']):,} total streams across up to "
         f"{int(row['active_songs'])} active song(s) from up to "
-        f"{int(row['active_artists'])} artist(s). Average catalog hit rate: "
-        f"{row['catalog_hit_rate']:.2f}%."
+        f"{int(row['active_artists'])} artist(s)."
+    )
+
+
+def song_chunk(row):
+    hit_note = "was a hit" if row['is_hit'] else "was not a hit"
+    label_note = f" on label {row['standardized_label']}" if row['standardized_label'] else ""
+    return (
+        f"Track {row['uri']}{label_note} had {int(row['total_streams']):,} "
+        f"total streams in {int(row['year'])} and {hit_note} that year."
     )
 
 
 TABLES = [
-    ('artist_performance', aggregate_artist_performance, artist_chunk, 'artist_uri'),
     ('country_performance', aggregate_country_performance, country_chunk, 'country_name'),
-    ('label_performance', aggregate_label_performance, label_chunk, 'standardized_label'),
+    ('label_performance_enhanced', aggregate_label_performance, label_chunk, 'standardized_label'),
+    ('kpi_song', aggregate_kpi_song, song_chunk, 'uri'),
 ]
 
 

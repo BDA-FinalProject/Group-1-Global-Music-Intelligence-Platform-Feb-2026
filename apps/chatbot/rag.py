@@ -46,7 +46,8 @@ def embed_query(text):
 
 _TABLE_KEYWORDS = {
     'country_performance': ['country', 'countries', 'market', 'nation'],
-    'label_performance': ['label', 'records', 'recordings'],
+    'label_performance_enhanced': ['label', 'records', 'recordings'],
+    'kpi_song': ['song', 'track', 'songs', 'tracks'],
 }
 
 _country_names = None
@@ -67,8 +68,8 @@ def _get_country_names():
 
 def classify_query(question):
     """Route the question to a source_table, so a small table (e.g.
-    country_performance, 672 chunks) isn't drowned out by a much larger one
-    (artist_performance, 151K chunks) in nearest-neighbor search.
+    country_performance) isn't drowned out by a much larger one (e.g.
+    kpi_song) in nearest-neighbor search.
 
     Checks real country names first (e.g. "India", "United States") since
     those are unambiguous signals a generic keyword search would miss.
@@ -260,17 +261,30 @@ def build_prompt(question, chunks):
 # additive, it never removes the pre-existing behavior.
 #
 # (table, entity_key_column, entity_display_column)
+# kpi_artist is deliberately NOT here — it has no total_streams column (see
+# module-level note in schema.sql), so superlative/trend would SQL-error if
+# routed there. It gets a narrow, count-only path instead — see
+# _COUNT_ONLY_TABLE_KEYWORDS below and its use in detect_sql_intent().
 _SQL_TABLE_KEYWORDS = {
-    'artist_performance': ('artist_uri', 'artist_name', ['artist', 'artists']),
     'country_performance': ('country_name', 'country_name', ['country', 'countries', 'market', 'nation']),
-    'label_performance': ('standardized_label', 'standardized_label', ['label', 'labels', 'records', 'recordings']),
+    'label_performance_enhanced': ('standardized_label', 'standardized_label', ['label', 'labels', 'records', 'recordings']),
+    'kpi_song': ('uri', 'uri', ['song', 'track', 'songs', 'tracks']),
+}
+
+# Count-only: (table, entity_key_column, keywords). COUNT(DISTINCT key_col)
+# is the one query shape in run_sql_intent() that never touches
+# total_streams, so kpi_artist (no metric columns) can safely support "how
+# many artists" without being exposed to superlative/trend.
+_COUNT_ONLY_TABLE_KEYWORDS = {
+    'kpi_artist': ('artist_uri', ['artist', 'artists']),
 }
 
 _COUNT_KEYWORDS = ['how many', 'total number of', 'number of']
 _TABLE_DISPLAY_NAME = {
-    'artist_performance': 'artists',
     'country_performance': 'countries',
-    'label_performance': 'labels',
+    'label_performance_enhanced': 'labels',
+    'kpi_song': 'tracks',
+    'kpi_artist': 'artists',
 }
 _TREND_KEYWORDS = ['grew', 'growth', 'grow']
 _SUPERLATIVE_KEYWORDS = ['highest', 'strongest', 'most', 'least', 'lowest', 'top']
@@ -287,12 +301,31 @@ def _sql_target_table(lowered_question):
     return None, None, None
 
 
+def _count_only_target_table(lowered_question):
+    """Same idea as _sql_target_table(), scoped to _COUNT_ONLY_TABLE_KEYWORDS
+    (tables with no metric columns, so only the count query shape is safe)."""
+    for table, (key_col, keywords) in _COUNT_ONLY_TABLE_KEYWORDS.items():
+        if any(kw in lowered_question for kw in keywords):
+            return table, key_col
+    return None, None
+
+
 def detect_sql_intent(question):
     """Returns a dict describing the SQL path to take, or None to fall
     through to vector retrieval. Keyword-triggered only — false negatives
     (an aggregate question phrased without a trigger word) degrade
     gracefully to the existing vector-retrieval behavior, not a regression."""
     lowered = question.lower()
+
+    # Count-only tables (e.g. kpi_artist) only ever support 'count' — check
+    # this first and return immediately so a "top artist" question (no
+    # total_streams column on kpi_artist) never reaches run_sql_intent()'s
+    # superlative/trend branches.
+    if any(kw in lowered for kw in _COUNT_KEYWORDS):
+        count_only_table, count_only_key_col = _count_only_target_table(lowered)
+        if count_only_table is not None:
+            return {'kind': 'count', 'table': count_only_table, 'key_col': count_only_key_col}
+
     table, key_col, name_col = _sql_target_table(lowered)
     if table is None:
         return None

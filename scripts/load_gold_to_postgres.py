@@ -2,13 +2,15 @@
 Loads the Gold layer into Postgres tables defined in schema.sql.
 Truncate-and-reload per table (static one-time load, not incremental).
 
-Reads from a local copy of s3://group-1-dbda/gold/ (see GOLD_LOCAL_DIR) via
-pyarrow.dataset, which reads an entire Hive-partitioned table in one pass
-and auto-derives the `year` column from the year=YYYY/ partition folders —
-much faster than looping over individual S3 GetObject calls per part-file.
+Reads from a local copy of s3://spotify-lake-dev-data/gold/ (see
+GOLD_LOCAL_DIR) via pyarrow.dataset, which reads an entire Hive-partitioned
+table in one pass and auto-derives the partition columns (year, and month
+for the two-level-partitioned tables) from the year=YYYY/[month=M/] folder
+structure — much faster than looping over individual S3 GetObject calls per
+part-file.
 
 To populate the local copy:
-    aws s3 sync s3://group-1-dbda/gold/ /path/to/.gold_local/
+    aws s3 sync s3://spotify-lake-dev-data/gold/ /path/to/.gold_local/
 
 Usage:
     python scripts/load_gold_to_postgres.py --dry-run
@@ -28,28 +30,34 @@ GOLD_LOCAL_DIR = Path(
     os.environ.get("GOLD_LOCAL_DIR", Path(__file__).resolve().parent.parent / ".gold_local")
 )
 
-# (subdir, postgres table, partitioned-by-year, primary-key-columns)
+# (subdir, postgres table, partition-levels, primary-key-columns)
+# partition-levels: 1 = S3 partitioned by year=YYYY/ only (month is an
+# ordinary column in the parquet); 2 = partitioned by year=YYYY/month=M/
+# (both year and month are derived from the path, no month column in the
+# parquet itself).
+#
 # PK columns are used for an ON CONFLICT DO NOTHING upsert: the real Gold
 # data has duplicate (key) rows across part-files (upstream reprocessing
 # splits the same group across files without merging) — first-seen wins.
 TABLES = [
-    ("artist_performance", "artist_performance", True, ["artist_uri", "year_month"]),
-    ("country_performance", "country_performance", True, ["country_name", "year_month"]),
-    ("label_performance", "label_performance", True, ["standardized_label", "year_month"]),
-    ("dashboard_summary", "dashboard_summary", False, ["year_month"]),
-    ("monthly_trends", "monthly_trends", False, ["year_month"]),
+    ("country_performance", "country_performance", 1, ["country_name", "year_month"]),
+    ("kpi_artist", "kpi_artist", 2, ["country_name", "artist_uri", "year_month"]),
+    ("kpi_song", "kpi_song", 2, ["country_name", "uri", "year_month"]),
+    ("label_performance_enhanced", "label_performance_enhanced", 1, ["standardized_label", "country_name", "year_month"]),
+    ("monthly_trends", "monthly_trends", 1, ["country_name", "year_month"]),
 ]
 
 BATCH_SIZE = 20_000
 
 
-def read_table_df(subdir, partitioned):
+def read_table_df(subdir, partition_levels):
     path = GOLD_LOCAL_DIR / subdir
-    partitioning = "hive" if partitioned else None
-    dataset = ds.dataset(str(path), format="parquet", partitioning=partitioning)
+    dataset = ds.dataset(str(path), format="parquet", partitioning="hive")
     df = dataset.to_table().to_pandas()
-    if partitioned:
-        df["year"] = df["year"].astype(int)
+    df["year"] = df["year"].astype(int)
+    if partition_levels == 2:
+        df["month"] = df["month"].astype(int)
+    df["year_month"] = df["year"].astype(str) + "-" + df["month"].astype(int).astype(str).str.zfill(2)
     return df
 
 
@@ -67,9 +75,9 @@ def load(dry_run: bool):
             password=os.environ["PGPASSWORD"],
         )
 
-    for subdir, table_name, partitioned, pk_cols in TABLES:
+    for subdir, table_name, partition_levels, pk_cols in TABLES:
         print(f"\n=== {table_name} ({subdir}) ===")
-        df = read_table_df(subdir, partitioned)
+        df = read_table_df(subdir, partition_levels)
         print(f"  {len(df):,} row(s) read from local parquet dataset")
         print(f"  columns: {list(df.columns)}")
 
