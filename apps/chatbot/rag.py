@@ -44,14 +44,37 @@ def embed_query(text):
     return _get_model().encode([text])[0].tolist()
 
 
+# Order matters: a question can contain more than one table's keywords at
+# once (e.g. "which artist has the most tracks" has both "artist" and
+# "tracks"), and the first dict entry whose keyword appears wins. kpi_song
+# ("song"/"track") is checked LAST because those are the most generic,
+# weakest signal here — "artist"/"country"/"label" are more specific and
+# should win when a question mentions both.
 _TABLE_KEYWORDS = {
     'country_performance': ['country', 'countries', 'market', 'nation'],
+    'artist_performance': ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians'],
     'label_performance_enhanced': ['label', 'records', 'recordings'],
     'kpi_song': ['song', 'track', 'songs', 'tracks'],
-    'artist_performance': ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians'],
 }
 
 _country_names = None
+
+# Common abbreviations/aliases for country names that appear verbatim in
+# country_performance — a stakeholder asking "How is the US doing?" is a
+# far more natural phrasing than the full country name, and without this
+# the question falls through to unfiltered vector search entirely (see
+# README's "known rough edges"). Matched via regex word boundaries, not
+# plain substring, since short tokens like "US"/"UK" would otherwise match
+# inside unrelated words (e.g. "US" inside "bonus").
+_COUNTRY_ALIASES = {
+    'us': 'United States',
+    'usa': 'United States',
+    'u.s.': 'United States',
+    'u.s.a.': 'United States',
+    'uk': 'United Kingdom',
+    'u.k.': 'United Kingdom',
+    'uae': 'United Arab Emirates',
+}
 
 
 def _get_country_names():
@@ -67,20 +90,79 @@ def _get_country_names():
     return _country_names
 
 
+def _alias_countries(lowered_question):
+    """Real country names implied by an abbreviation/alias in the question
+    (e.g. "US" -> "United States"), matched on word boundaries so short
+    tokens don't match inside unrelated words. Returns real country_name
+    values, not the aliases themselves, so callers never need to know
+    aliases exist."""
+    found = []
+    for alias, real_name in _COUNTRY_ALIASES.items():
+        if re.search(r'\b' + re.escape(alias) + r'\b', lowered_question):
+            found.append(real_name)
+    return found
+
+
+_artist_catalog = None
+
+
+def _get_artist_catalog():
+    """Cached (artist_name, artist_uri) pairs from artist_performance,
+    longest name first. gold_chunks' source_key for artist_performance is
+    keyed on artist_uri (not name — see build_gold_chunks.py), so
+    name-based routing needs the uri to actually filter chunks by; names
+    aren't unique (e.g. 8 different artist_uris are all named "Kali" in
+    this data) so each name resolves to whichever uri has the most total
+    streams — the most likely real match for a bare-name question.
+
+    Names under 5 characters are excluded entirely — 5,782 artist names in
+    this data are <=4 chars (many are bare single letters, e.g. "E", "F",
+    "T"), which would match as a substring inside huge numbers of unrelated
+    questions. This trades a small amount of recall (short-named artists
+    never get exact-match routing, only generic keyword/vector fallback)
+    for not hijacking routing on ordinary text."""
+    global _artist_catalog
+    if _artist_catalog is None:
+        with connections['gold'].cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (artist_name) artist_name, artist_uri
+                FROM (
+                    SELECT artist_name, artist_uri, SUM(total_streams) AS total
+                    FROM artist_performance
+                    WHERE artist_name IS NOT NULL AND length(artist_name) >= 5
+                    GROUP BY artist_name, artist_uri
+                ) ranked
+                ORDER BY artist_name, total DESC
+                """
+            )
+            pairs = cur.fetchall()
+        _artist_catalog = sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+    return _artist_catalog
+
+
 def classify_query(question):
     """Route the question to a source_table, so a small table (e.g.
     country_performance) isn't drowned out by a much larger one (e.g.
     kpi_song) in nearest-neighbor search.
 
-    Checks real country names first (e.g. "India", "United States") since
-    those are unambiguous signals a generic keyword search would miss.
-    Falls back to generic keywords, then to no filter (search all tables).
+    Checks real country and artist names first (e.g. "India", "Taylor
+    Swift") since those are unambiguous signals a generic keyword search
+    would miss — e.g. "How did Taylor Swift perform in 2025?" has no
+    "artist"/"singer" keyword at all otherwise. Falls back to generic
+    keywords, then to no filter (search all tables).
     """
     lowered = question.lower()
 
     for name in _get_country_names():
         if name.lower() in lowered:
             return 'country_performance'
+    if _alias_countries(lowered):
+        return 'country_performance'
+
+    for name, _uri in _get_artist_catalog():
+        if name.lower() in lowered:
+            return 'artist_performance'
 
     for table, keywords in _TABLE_KEYWORDS.items():
         if any(kw in lowered for kw in keywords):
@@ -89,15 +171,36 @@ def classify_query(question):
 
 
 def detect_countries(question):
-    """Returns every real country name mentioned in the question, longest
-    match first (reuses the same name list/ordering as classify_query()).
-    Used only to detect multi-country comparison questions ("Compare India
-    and Brazil") — classify_query() itself still returns a single table."""
+    """Returns every real country name mentioned in the question (including
+    via an alias like "US" -> "United States"), longest full-name match
+    first (reuses the same name list/ordering as classify_query()), alias
+    matches appended after. Used only to detect multi-country comparison
+    questions ("Compare India and Brazil", "Compare US and India") —
+    classify_query() itself still returns a single table."""
     lowered = question.lower()
     found = []
     for name in _get_country_names():
         if name.lower() in lowered:
             found.append(name)
+    for name in _alias_countries(lowered):
+        if name not in found:
+            found.append(name)
+    return found
+
+
+def detect_artists(question):
+    """Same idea as detect_countries(), for artist_performance's
+    artist_name (see _get_artist_catalog() for why short names are
+    excluded and how name collisions are resolved). Used for multi-artist
+    comparison ("Compare Bad Bunny and Drake") and single-artist
+    exact-chunk routing. Returns (name, artist_uri) pairs — gold_chunks'
+    source_key for artist_performance is keyed on artist_uri, not name, so
+    callers need the uri to actually filter chunks."""
+    lowered = question.lower()
+    found = []
+    for name, uri in _get_artist_catalog():
+        if name.lower() in lowered:
+            found.append((name, uri))
     return found
 
 
@@ -279,11 +382,14 @@ def build_prompt(question, chunks):
 # unlike kpi_artist -- so unlike the old kpi_artist-only setup, artist
 # questions now support the full count/superlative/trend range through this
 # generic dict, same as every other entity.
+# Same ordering rationale as _TABLE_KEYWORDS above — kpi_song's generic
+# "song"/"track" keywords checked last so a more specific co-occurring
+# keyword (e.g. "artist") wins.
 _SQL_TABLE_KEYWORDS = {
     'country_performance': ('country_name', 'country_name', ['country', 'countries', 'market', 'nation']),
+    'artist_performance': ('artist_uri', 'artist_name', ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians']),
     'label_performance_enhanced': ('standardized_label', 'standardized_label', ['label', 'labels', 'records', 'recordings']),
     'kpi_song': ('uri', 'uri', ['song', 'track', 'songs', 'tracks']),
-    'artist_performance': ('artist_uri', 'artist_name', ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians']),
 }
 
 _COUNT_KEYWORDS = ['how many', 'total number of', 'number of']
@@ -294,7 +400,11 @@ _TABLE_DISPLAY_NAME = {
     'artist_performance': 'artists',
 }
 _TREND_KEYWORDS = ['grew', 'growth', 'grow']
-_SUPERLATIVE_KEYWORDS = ['highest', 'strongest', 'most', 'least', 'lowest', 'top']
+_SUPERLATIVE_KEYWORDS = [
+    'highest', 'strongest', 'most', 'least', 'lowest', 'top', 'best',
+    'worst', 'bottom', 'fastest', 'number one', 'number 1',
+]
+_ASCENDING_KEYWORDS = ['least', 'lowest', 'worst', 'bottom']
 
 _YEAR_RE = re.compile(r'\b(20\d{2})\b')
 
@@ -316,9 +426,49 @@ def detect_sql_intent(question):
     lowered = question.lower()
     table, key_col, name_col = _sql_target_table(lowered)
     if table is None:
+        # No entity keyword at all, but a bare "how many streams do we
+        # have" is still answerable — it's an implicit global total, not a
+        # per-entity one. country_performance is the natural "whole
+        # platform" table (every country, every month) to sum from.
+        # Anything else with no table match still correctly falls through
+        # to vector retrieval.
+        if any(kw in lowered for kw in _COUNT_KEYWORDS) and 'stream' in lowered:
+            years = _YEAR_RE.findall(question)
+            return {
+                'kind': 'sum_streams', 'table': 'country_performance',
+                'year': int(years[0]) if years else None,
+            }
         return None
 
     if any(kw in lowered for kw in _COUNT_KEYWORDS):
+        # "how many streams..." asks to SUM a metric, not COUNT(DISTINCT
+        # entity) — without this, a question like "how many total streams
+        # across all countries in 2025" matched "countries" as the table
+        # keyword and wrongly answered with the *country count* (72)
+        # instead of a streams total. 'stream' takes priority over the
+        # generic count path whenever both are present, since a metric
+        # noun in the question is a stronger, more specific signal than an
+        # entity-plural keyword.
+        if 'stream' in lowered:
+            years = _YEAR_RE.findall(question)
+            return {
+                'kind': 'sum_streams', 'table': table,
+                'year': int(years[0]) if years else None,
+            }
+        # "how many hit songs/tracks [in YEAR]" — a blanket COUNT(DISTINCT
+        # uri) ignored both the "hit" filter and the year, e.g. answering
+        # "how many hit songs were there in 2024" with the total track
+        # count (242,572) regardless of hit status or year. Only kpi_song
+        # has is_hit; other tables' "hit" concepts (hit_track_count on
+        # artist_performance, hit_songs on country_performance) are
+        # pre-aggregated counts, not filterable rows, so this only applies
+        # here.
+        if table == 'kpi_song' and 'hit' in lowered:
+            years = _YEAR_RE.findall(question)
+            return {
+                'kind': 'count_hits', 'table': table,
+                'year': int(years[0]) if years else None,
+            }
         return {'kind': 'count', 'table': table, 'key_col': key_col}
 
     if any(kw in lowered for kw in _TREND_KEYWORDS):
@@ -329,16 +479,31 @@ def detect_sql_intent(question):
         return {
             'kind': 'trend', 'table': table, 'key_col': key_col, 'name_col': name_col,
             'target_year': target_year, 'prev_year': target_year - 1,
-            'ascending': 'least' in lowered,
+            'ascending': any(kw in lowered for kw in _ASCENDING_KEYWORDS),
         }
 
     if any(kw in lowered for kw in _SUPERLATIVE_KEYWORDS):
         return {
             'kind': 'superlative', 'table': table, 'key_col': key_col, 'name_col': name_col,
-            'ascending': any(kw in lowered for kw in ('least', 'lowest')),
+            'ascending': any(kw in lowered for kw in _ASCENDING_KEYWORDS),
         }
 
     return None
+
+
+# kpi_song's only "name" column is uri (spotify:track:...) -- there's no
+# title column on that table itself, but track_catalog (built from Silver,
+# see schema.sql) has the real track_name for most uris. Superlative/trend
+# queries on kpi_song join it in so "top track" cites a real name instead
+# of the bare uri; COALESCE falls back to the uri for the tracks
+# track_catalog doesn't cover (different source pipelines, not every
+# kpi_song uri has a Silver-side match).
+_NAME_JOIN = {
+    'kpi_song': (
+        'LEFT JOIN track_catalog tc ON tc.uri = {table}.uri',
+        'COALESCE(tc.track_name, {table}.uri)',
+    ),
+}
 
 
 def run_sql_intent(intent, limit=5):
@@ -349,7 +514,9 @@ def run_sql_intent(intent, limit=5):
     a list of (label, value) tuples and description is a short string
     used both for the LLM context and for the 'sources' field."""
     table = intent['table']
-    key_col = intent['key_col']
+    key_col = intent.get('key_col')
+    join_clause, name_expr = _NAME_JOIN.get(table, ('', '{name_col}'))
+    join_clause = join_clause.format(table=table)
 
     with connections['gold'].cursor() as cur:
         if intent['kind'] == 'count':
@@ -357,12 +524,39 @@ def run_sql_intent(intent, limit=5):
             count = cur.fetchone()[0]
             return [(table, count)], f"sql:{table}:COUNT(DISTINCT {key_col})"
 
+        if intent['kind'] == 'count_hits':
+            if intent['year'] is not None:
+                cur.execute(
+                    "SELECT COUNT(DISTINCT uri) FROM kpi_song WHERE is_hit = 1 AND year = %s",
+                    [intent['year']],
+                )
+                desc = f"sql:kpi_song:COUNT(DISTINCT uri) WHERE is_hit=1 AND year={intent['year']}"
+            else:
+                cur.execute("SELECT COUNT(DISTINCT uri) FROM kpi_song WHERE is_hit = 1")
+                desc = "sql:kpi_song:COUNT(DISTINCT uri) WHERE is_hit=1"
+            count = cur.fetchone()[0]
+            return [(table, count)], desc
+
+        if intent['kind'] == 'sum_streams':
+            if intent['year'] is not None:
+                cur.execute(
+                    f"SELECT SUM(total_streams) FROM {table} WHERE year = %s",  # noqa: S608 — table from fixed dict, not user input
+                    [intent['year']],
+                )
+                desc = f"sql:{table}:SUM(total_streams) WHERE year={intent['year']}"
+            else:
+                cur.execute(f"SELECT SUM(total_streams) FROM {table}")  # noqa: S608 — table from fixed dict, not user input
+                desc = f"sql:{table}:SUM(total_streams)"
+            total = cur.fetchone()[0] or 0
+            return [(table, total)], desc
+
         if intent['kind'] == 'superlative':
             name_col = intent['name_col']
+            select_name = name_expr.format(table=table, name_col=name_col)
             direction = 'ASC' if intent['ascending'] else 'DESC'
             cur.execute(
-                f"SELECT {name_col}, SUM(total_streams) AS total "  # noqa: S608
-                f"FROM {table} GROUP BY {key_col}, {name_col} "
+                f"SELECT {select_name}, SUM({table}.total_streams) AS total "  # noqa: S608
+                f"FROM {table} {join_clause} GROUP BY {table}.{key_col}, {select_name} "
                 f"ORDER BY total {direction} LIMIT %s",
                 [limit],
             )
@@ -371,14 +565,15 @@ def run_sql_intent(intent, limit=5):
 
         if intent['kind'] == 'trend':
             name_col = intent['name_col']
+            select_name = name_expr.format(table=table, name_col=name_col)
             direction = 'ASC' if intent['ascending'] else 'DESC'
             cur.execute(
                 f"""
                 WITH yearly AS (
-                    SELECT {key_col} AS k, {name_col} AS name, year, SUM(total_streams) AS total
-                    FROM {table}
-                    WHERE year IN (%s, %s)
-                    GROUP BY {key_col}, {name_col}, year
+                    SELECT {table}.{key_col} AS k, {select_name} AS name, {table}.year AS year, SUM({table}.total_streams) AS total
+                    FROM {table} {join_clause}
+                    WHERE {table}.year IN (%s, %s)
+                    GROUP BY {table}.{key_col}, {select_name}, {table}.year
                 )
                 SELECT a.name, (a.total - COALESCE(b.total, 0)) AS growth
                 FROM yearly a
@@ -457,6 +652,14 @@ def get_rag_reply(question):
             table = rows[0][0]
             label = _TABLE_DISPLAY_NAME.get(table, table)
             return {'reply': f"There are **{count}** distinct {label} in the data.", 'sources': [description]}
+        if sql_intent['kind'] == 'sum_streams':
+            total = rows[0][1]
+            year_note = f" in {sql_intent['year']}" if sql_intent['year'] else ""
+            return {'reply': f"Total streams{year_note}: **{total:,}**.", 'sources': [description]}
+        if sql_intent['kind'] == 'count_hits':
+            count = rows[0][1]
+            year_note = f" in {sql_intent['year']}" if sql_intent['year'] else ""
+            return {'reply': f"There are **{count}** hit tracks{year_note} in the data.", 'sources': [description]}
         prompt = build_sql_prompt(question, rows, description)
         reply_text = _call_llm(prompt)
         return {'reply': reply_text, 'sources': [description]}
@@ -465,15 +668,54 @@ def get_rag_reply(question):
     # country is semantically nearest crowd out the other(s) entirely (see
     # retrieve_chunks_for_entity() docstring), so a question naming 2+ real
     # countries gets one scoped retrieval per country instead of one shared
-    # query. Only countries are covered here — classify_query() has no
-    # equivalent exact-name list for artists, and building one is out of
-    # scope for this change (see IMPLEMENTATION_LOG.md).
+    # query. Same idea for artists in 2c/2d below.
     countries = detect_countries(question)
     if len(countries) >= 2:
         embedding = embed_query(question)
         chunks = []
         for name in countries:
             chunks.extend(retrieve_chunks_for_entity(embedding, 'country_performance', name, top_k=5))
+        prompt = build_prompt(question, chunks)
+        reply_text = _call_llm(prompt)
+        sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
+        return {'reply': reply_text, 'sources': sources}
+
+    # 2b. Single named/aliased country — same exact-match reasoning as the
+    # comparison case above, not just a table restriction. Matters most for
+    # aliases ("US", "UK"): the chunk text itself says "United States", not
+    # "US", so relying on embedding similarity alone (the generic path
+    # below) can miss it entirely and surface an unrelated country instead.
+    if len(countries) == 1:
+        embedding = embed_query(question)
+        chunks = retrieve_chunks_for_entity(embedding, 'country_performance', countries[0], top_k=5)
+        prompt = build_prompt(question, chunks)
+        reply_text = _call_llm(prompt)
+        sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
+        return {'reply': reply_text, 'sources': sources}
+
+    # 2c. Multi-artist comparison — same reasoning as multi-country above.
+    # Checked after countries (a question naming both would be unusual, and
+    # country takes priority since that path was there first).
+    artists = detect_artists(question)
+    if len(artists) >= 2:
+        embedding = embed_query(question)
+        chunks = []
+        for name, uri in artists:
+            chunks.extend(retrieve_chunks_for_entity(embedding, 'artist_performance', uri, top_k=5))
+        prompt = build_prompt(question, chunks)
+        reply_text = _call_llm(prompt)
+        sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
+        return {'reply': reply_text, 'sources': sources}
+
+    # 2d. Single named artist — same exact-match reasoning as 2b for
+    # countries. Without this, "How did Taylor Swift perform in 2025?" (no
+    # "artist" keyword) falls all the way to the generic path below, where
+    # embedding similarity alone can surface unrelated track chunks instead
+    # of her own artist_performance chunks (observed in testing).
+    if len(artists) == 1:
+        name, uri = artists[0]
+        embedding = embed_query(question)
+        chunks = retrieve_chunks_for_entity(embedding, 'artist_performance', uri, top_k=5)
         prompt = build_prompt(question, chunks)
         reply_text = _call_llm(prompt)
         sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
