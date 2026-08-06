@@ -9,28 +9,35 @@ CDAC Big Data Engineering group project.
 ## System architecture
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌───────────────────────────┐
-│   AWS S3     │────▶│  PostgreSQL 17     │────▶│   Django (EC2, Nginx +     │
-│  Gold layer  │     │  + pgvector        │     │   Gunicorn)                 │
-│  (Parquet)   │     │                    │     │                              │
-└─────────────┘     │  ├─ country_performance│  │  ┌─────────┐  ┌───────────┐ │
-                     │  ├─ kpi_artist         │  │  │Dashboard │  │  Chatbot   │ │
-                     │  ├─ kpi_song           │  │  └─────────┘  └───────────┘ │
-                     │  ├─ label_performance_ │  └──────────┬──────────────────┘
-                     │  │   enhanced          │             │
-                     │  ├─ monthly_trends     │             │
-                     │  └─ gold_chunks (RAG)  │             ▼
-                     └────────────────────────┘      Groq LLM API
-                                                    (llama-3.3-70b)
+┌──────────────┐     ┌──────────────────┐     ┌───────────────────────────┐
+│   AWS S3      │────▶│  PostgreSQL 17     │────▶│   Django (EC2, Nginx +     │
+│  Gold layer   │     │  + pgvector        │     │   Gunicorn)                 │
+│  (Parquet)    │     │                    │     │                              │
+└──────────────┘     │  ├─ country_performance│  │  ┌─────────┐  ┌───────────┐ │
+       ▲              │  ├─ kpi_artist         │  │  │Dashboard │  │  Chatbot   │ │
+       │              │  ├─ kpi_song           │  │  └─────────┘  └───────────┘ │
+┌──────┴──────┐       │  ├─ label_performance_ │  └──────────┬──────────────────┘
+│   AWS S3     │       │  │   enhanced          │             │
+│  Silver layer│       │  ├─ monthly_trends     │             │
+│ (song_charts)│       │  ├─ artist_performance │             │
+└─────────────┘       │  ├─ track_catalog      │             │
+                       │  └─ gold_chunks (RAG)  │             ▼
+                       └────────────────────────┘      Groq LLM API
+                                                       (llama-3.3-70b)
 ```
 
-Source bucket: `s3://spotify-lake-dev-data/gold/` — country/artist/song/label/monthly-trend
-tables, all country-grain. `kpi_artist` is a country×artist×month presence table with no metric
-columns (no artist-level streams/active-songs exist in this source), so it's used only for
-entity-count SQL queries, never for RAG chunks or superlative/trend queries.
+Source: `s3://spotify-lake-dev-data/gold/` — country/song/label/monthly-trend tables, all
+country-grain. `kpi_artist` is a country×artist×month presence table with no metric columns (no
+artist-level streams in the original Gold source), so on its own it's only useful for
+entity-count SQL queries. `artist_performance` and `track_catalog` fill that gap — they're built
+separately, from the **Silver** layer (`s3://spotify-lake-dev-data/silver/song_charts/`), which
+has real per-(country, track, day) streams plus artist name/URI (something Gold's `kpi_artist`/
+`kpi_song` never had), then landed in Gold as first-class tables so they flow through the same
+pipeline as the rest — see [`scripts/build_artist_gold.py`](./scripts/build_artist_gold.py).
 
 ```
 scripts/load_gold_to_postgres.py   S3 Parquet ──▶ Postgres Gold tables
+scripts/build_artist_gold.py       S3 Silver ──▶ artist_performance / track_catalog Parquet ──▶ S3 Gold
 scripts/build_gold_chunks.py       Gold tables ──▶ yearly chunks ──▶ MiniLM embeddings ──▶ gold_chunks
 ```
 
@@ -108,8 +115,7 @@ yearly rows
 chunk text  ──▶  all-MiniLM-L6-v2  ──▶  384-dim vector  ──▶  gold_chunks (pgvector)
 ```
 
-~408,849 chunks total (344,323 track · 63,864 label · 662 country). No artist-level chunks —
-the source data has no artist metric columns (see architecture diagram above).
+~560,359 chunks total (344,323 track · 151,510 artist · 63,864 label · 662 country).
 
 ---
 
@@ -125,14 +131,28 @@ Source: `s3://spotify-lake-dev-data/gold/`, Parquet, Hive-partitioned. Loaded in
 | `kpi_song` | `year=YYYY/month=M/` | country × track × month | `year, month, year_month, country_name, uri, standardized_label, total_streams, is_hit` | 2,462,557 |
 | `label_performance_enhanced` | `year=YYYY/` (month is a column) | country × label × month | `year, month, year_month, country_name, standardized_label, total_streams, active_songs, active_artists` | 929,858 |
 | `monthly_trends` | `year=YYYY/` (month is a column) | country × month | `year, month, year_month, country_name, total_streams, active_songs, active_labels, hit_songs, avg_chart_strength, active_artists, growth_percentage` | 7,313 |
-| `gold_chunks` | — (Postgres-only, RAG store) | entity × year | `chunk_id, source_table, source_key, chunk_text, embedding vector(384)` | 408,849 |
+| `artist_performance` | `year=YYYY/` (month is a column) | country × artist × month | `year, month, year_month, country_name, artist_uri, artist_name, total_streams, track_count, hit_track_count, best_rank` | 1,894,035 |
+| `track_catalog` | unpartitioned | one row per track | `uri, track_name` — lookup only, no metrics | 242,572 |
+| `gold_chunks` | — (Postgres-only, RAG store) | entity × year | `chunk_id, source_table, source_key, chunk_text, embedding vector(384)` | 560,359 |
 
-**Why `kpi_artist` can't answer "how much did artist X stream"**: it's a pure presence table
-(which artist appeared in which country, in which month) with zero numeric columns. `kpi_song`
-has real streaming numbers, but only at the *track* level (`uri`, a `spotify:track:...` id) — and
-there is no artist↔track mapping anywhere in these 5 tables (`kpi_artist.artist_uri` values and
-`kpi_song.uri` values were checked directly against each other: zero overlap). So artist-level
-totals genuinely cannot be computed from this Gold source, not just "not implemented yet."
+**Why `kpi_artist`/`kpi_song` alone couldn't answer "how much did artist X stream"**: `kpi_artist`
+is a pure presence table (which artist appeared in which country, in which month) with zero
+numeric columns; `kpi_song` has real streaming numbers but only at the *track* level, with no
+artist↔track mapping (`kpi_artist.artist_uri` and `kpi_song.uri` were checked directly against
+each other: zero overlap). That link doesn't exist anywhere in the original Gold source.
+
+**Where `artist_performance`/`track_catalog` come from instead**: the **Silver** layer
+(`s3://spotify-lake-dev-data/silver/song_charts/`, ~47M day-level rows) has exactly what Gold was
+missing — real `streams` per `(country, track, day)`, plus `artist_names`/`artist_uris` (pipe
+`|`-delimited for collabs) and the real `track_name`. `scripts/build_artist_gold.py` explodes the
+collab-delimited columns (one row per credited artist — a collab track's streams are attributed
+in *full* to each artist, not split) and aggregates down to `(country, artist, month)`, processing
+one Silver month-file at a time to stay within a laptop's RAM (47M raw rows is too much for one
+pandas DataFrame — the aggregated result per file is much smaller and is all that's kept across
+files). One edge case handled explicitly: a small number of rows have an artist name that itself
+contains a literal `|` (e.g. a bilingual name like "Nizr | نايزر"), which would otherwise be
+mis-split as two artists — detected by comparing the `artist_names`/`artist_uris` split counts per
+row and falling back to the whole name when they disagree.
 
 ---
 
@@ -142,22 +162,23 @@ The RAG pipeline (`apps/chatbot/rag.py`, `get_rag_reply()`) routes every questio
 
 1. **SQL router** (`detect_sql_intent()`) — deterministic answers for count/superlative/growth
    questions, computed straight from Postgres, no LLM guessing involved for the number itself.
-2. **Artist-keyword hard block** — a non-count question mentioning "artist"/"singer"/"musician"
-   returns `"I don't have data to answer that."` immediately (see table above for why).
-3. **Multi-country comparison** — 2+ real country names in one question get separate, merged
+   `artist_performance` is a full entry here (not count-only) — real metrics mean artist
+   count/superlative/trend all work through the same generic code path as country/label/track.
+2. **Multi-country comparison** — 2+ real country names in one question get separate, merged
    retrievals so one country can't crowd the other out of a shared top-k.
-4. **Vector retrieval + confidence gate** — embeds the question, searches `gold_chunks` via
+3. **Vector retrieval + confidence gate** — embeds the question, searches `gold_chunks` via
    pgvector, and refuses to answer (rather than guess) if no table/keyword matched *and* the
    closest chunk is still farther than `NO_MATCH_DISTANCE_THRESHOLD` (0.95).
 
 | Can answer | Can't answer (and why) |
 |---|---|
-| Country lookups/comparisons (`country_performance`) | Artist-level anything — no metrics exist for artists in this source |
-| Label lookups (`label_performance_enhanced`, global-aggregated across countries) | Country-scoped label questions ("top label **in India**") — label chunks are global totals, not per-country |
-| Track lookups (`kpi_song`, cited by raw `spotify:track:...` URI) | Track names — `kpi_song` has no title column, only URIs |
-| Counts: artists, labels, tracks, countries (`COUNT(DISTINCT ...)`) | `catalog_hit_rate` — this column existed in the old source, doesn't exist in the new one |
-| Superlatives: highest/lowest streams by country/label/track | Global year-over-year trend narratives — `monthly_trends` isn't chunked (see below), so a vague trend question can occasionally land on a coincidentally-named label chunk instead of refusing |
-| Growth/trend questions with an explicit year ("grew in 2023") | |
+| Country lookups/comparisons (`country_performance`) | Country-scoped label questions ("top label **in India**") — label chunks are global totals, not per-country |
+| Label lookups (`label_performance_enhanced`, global-aggregated across countries) | `catalog_hit_rate` — this column existed in the old source, doesn't exist in the new one |
+| Track lookups (`kpi_song` + `track_catalog`, real track names when available, raw URI fallback otherwise) | Global year-over-year trend narratives — `monthly_trends` isn't chunked (see below), so a vague trend question can occasionally land on a coincidentally-named label chunk instead of refusing |
+| **Artist lookups/counts/superlatives/trends** (`artist_performance`, built from Silver — see "Gold-layer tables" above) | "How did \[artist name\] perform" phrased *without* a trigger keyword ("artist", "singer", etc.) — `classify_query()` only does exact-name matching for **countries**, not artists (59,776 of them), so it can fall through to an unfiltered search and retrieve individual track chunks instead of the artist's own yearly rollup. Still answers with real data, just not always the ideal chunk. |
+| Counts: artists, labels, tracks, countries (`COUNT(DISTINCT ...)`) | |
+| Superlatives: highest/lowest streams by country/label/track/**artist** | |
+| Growth/trend questions with an explicit year ("grew in 2023"), including by artist | |
 | Out-of-scope questions (weather, jokes, etc.) — refuses cleanly | |
 
 **Why `monthly_trends` isn't in `gold_chunks`**: it's used only to power the dashboard's
@@ -175,13 +196,15 @@ this source's schema changed.
 | Basic lookup | How did Brazil perform in 2024? |
 | SQL-routed | Which country had the strongest streaming numbers? |
 | SQL-routed | Which label has the most streams? |
-| SQL-routed | How many artists are in the data? *(kpi_artist, count-only)* |
+| SQL-routed | Who is the top artist by streams? |
+| SQL-routed | Which artist grew the most in 2023? |
+| SQL-routed | How many artists are in the data? |
 | SQL-routed | How many tracks are there? |
 | Comparison | Compare India and Brazil's streaming performance. |
 | Comparison | Compare United States and Mexico's market share. |
 | Should refuse cleanly | What is the weather like today? |
 | Should refuse cleanly | Tell me a joke. |
-| Known limitation | Who is the top artist by streams? *(no artist metrics in this source — degrades to "I don't have data")* |
+| Known rough edge | How did Taylor Swift perform in 2025? *(no "artist" keyword to route on — answers from individual track chunks with real numbers, not the artist's own yearly rollup; see "What the chatbot can and can't answer")* |
 
 ---
 
@@ -195,8 +218,8 @@ this source's schema changed.
 | `country_chunk()` silently dropped two computed fields | Added the fields back, re-embedded just those 672 chunks |
 | No index on `embedding` — every query was a full table scan | Built the `ivfflat` index, tuned `probes` for full recall |
 | — | Wired up Groq as the LLM, Ollama still works as fallback |
-| (post gold-source-migration) "who is the top artist by streams" fell through to unfiltered vector search and answered from a label chunk whose name read like an artist's (e.g. "Martin Arteta") | Artist-keyword hard block before vector retrieval (see "What the chatbot can and can't answer") |
 | Vague trend questions ("global streaming trend...") coincidentally matched a label chunk (e.g. a label literally named "Trending Now") | `NO_MATCH_DISTANCE_THRESHOLD` re-measured and tightened 1.10 → 0.95 against the current `gold_chunks`; some coincidental matches (e.g. a query containing "years" matching a label called "17 Earth Years", distance ~0.87) remain a known, documented gap — indistinguishable from a real match by distance alone |
+| Gold source had no artist-level metrics at all — "who is the top artist by streams" landed on unrelated label chunks and gave misleading answers (temporarily hard-blocked to an honest refusal instead) | Built real `artist_performance`/`track_catalog` tables from the **Silver** layer (which has the artist↔streams link Gold never had — see "Gold-layer tables"), removed the hard block, wired the new table into the SQL router and chunk builder like any other entity |
 
 Tested on the same 15 questions before/after every change. **7/15 flipped from wrong to correct, 0 regressions.**
 
@@ -262,6 +285,8 @@ systemd service → Nginx reverse proxy.
 | Embedding 408,849 chunks on the server was still slow even on `m5.large` (CPU-only, x86) | Ran `build_gold_chunks.py` locally instead (Apple M1, 8 cores) — 9 minutes vs 1.5+ hours — then `pg_dump`/`pg_restore` just the `gold_chunks` table onto the server |
 | Restoring the 750MB `gold_chunks` dump filled the 20GB root EBS volume | Grew the EBS volume to 40GB online (`modify-volume` + `growpart` + `resize2fs`, no downtime) |
 | `ivfflat` index built on an empty table (before data load) warned of low recall | Dropped and rebuilt it after loading, with `lists` sized to the real row count |
+| Adding `artist_performance`/`track_catalog` meant re-embedding 560,359 chunks (up from 408,849) — same local-vs-server tradeoff as before, plus the second local run's `executemany()` insert took noticeably longer than the row-count increase alone would suggest | Ran locally again (embedding: 12.5 min); redeployed via a **full** `pg_dump`/`pg_restore` of the whole local `gold` database this time (not just `gold_chunks`), since the two new tables also needed to reach the server |
+| Restoring the larger (1.23GB) full-DB dump needed disk headroom again | EBS was already grown to 40GB from the prior round — confirmed free space before restoring rather than re-growing blind |
 
 ---
 
@@ -276,6 +301,12 @@ python3 manage.py runserver
 ```
 
 ```bash
+# optional: rebuild artist_performance/track_catalog from Silver first
+# (aws s3 sync s3://spotify-lake-dev-data/silver/song_charts/ .silver_local/)
+python3 scripts/build_artist_gold.py --dry-run   # sanity-check on 1 file first
+python3 scripts/build_artist_gold.py             # full run, ~113 Silver files
+# then aws s3 sync the output up to s3://spotify-lake-dev-data/gold/{artist_performance,track_catalog}/
+
 # rebuild the chunk store from scratch
 python3 scripts/load_gold_to_postgres.py
 python3 scripts/build_gold_chunks.py
@@ -300,6 +331,7 @@ apps/
 scripts/
   load_gold_to_postgres.py
   build_gold_chunks.py
+  build_artist_gold.py      Silver -> artist_performance/track_catalog
   rag_baseline_probe.py
 schema.sql
 ```

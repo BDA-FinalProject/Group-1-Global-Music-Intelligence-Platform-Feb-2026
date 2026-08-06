@@ -14,6 +14,16 @@
 -- metrics at all (country x artist x month presence only), so it cannot
 -- reconstruct anything like the old artist_performance table.
 --
+-- artist_performance and track_catalog (below) are NOT part of the
+-- original Gold source -- they're built by scripts/build_artist_gold.py
+-- from the SILVER layer (s3://spotify-lake-dev-data/silver/song_charts/),
+-- which has real per-(country, track, day) streams plus artist_names/
+-- artist_uris (collab tracks are pipe '|'-delimited), something the Gold
+-- layer's kpi_artist/kpi_song never had. Uploaded to
+-- s3://spotify-lake-dev-data/gold/artist_performance/ and .../track_catalog/
+-- as first-class Gold tables so they load through the exact same
+-- load_gold_to_postgres.py pipeline as the other five.
+--
 -- `year` is only present as an S3 partition (year=YYYY/) for every table
 -- below; `month` is a partition (month=M/) for kpi_artist/kpi_song only --
 -- for the other three it is an ordinary column inside the parquet files.
@@ -101,6 +111,36 @@ CREATE TABLE monthly_trends (
     PRIMARY KEY (country_name, year_month)
 );
 CREATE INDEX idx_monthly_trends_year_month ON monthly_trends (year_month);
+
+-- Built from Silver (see note above), not the original Gold source.
+-- Partitioned in S3 by year=YYYY/ only -- month is a real column, derived
+-- from Silver's per-day `date` field during aggregation. A collab track's
+-- streams are attributed in FULL to each credited artist (not split) --
+-- see scripts/build_artist_gold.py's docstring for the reasoning.
+CREATE TABLE artist_performance (
+    year             INTEGER NOT NULL,   -- derived from S3 partition path
+    month            INTEGER NOT NULL,
+    year_month       TEXT NOT NULL,
+    country_name     TEXT NOT NULL,
+    artist_uri       TEXT NOT NULL,
+    artist_name      TEXT,
+    total_streams    BIGINT,
+    track_count      BIGINT,
+    hit_track_count  BIGINT,
+    best_rank        INTEGER,
+    PRIMARY KEY (country_name, artist_uri, year_month)
+);
+CREATE INDEX idx_artist_performance_artist_uri ON artist_performance (artist_uri);
+CREATE INDEX idx_artist_performance_year_month ON artist_performance (year_month);
+
+-- Built from Silver (see note above). Not partitioned in S3 -- one row per
+-- unique track (uri), first-seen track_name wins. Lookup-only table, no
+-- metrics -- used to enrich RAG chunk text with real track names instead
+-- of citing the bare kpi_song.uri.
+CREATE TABLE track_catalog (
+    uri         TEXT PRIMARY KEY,
+    track_name  TEXT
+);
 
 -- RAG chunk store. embedding dimension N pinned after Step 4's local
 -- embedding-model test (all-MiniLM-L6-v2 -> 384-dim). Update N here if a

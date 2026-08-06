@@ -1,14 +1,17 @@
 """
-Aggregates country_performance / label_performance_enhanced / kpi_song from
-monthly grain to yearly grain, generates one RAG chunk per (entity, year),
-embeds with all-MiniLM-L6-v2, and loads into gold_chunks.
+Aggregates country_performance / label_performance_enhanced / kpi_song /
+artist_performance from monthly grain to yearly grain, generates one RAG
+chunk per (entity, year), embeds with all-MiniLM-L6-v2, and loads into
+gold_chunks.
 
 kpi_artist is intentionally excluded — it has no metric columns (country x
-artist x month presence only), so there is no fact to narrate. monthly_trends
-is intentionally excluded too — it's a per-country-per-month aggregate used
-only for the dashboard's cross-country trend chart, not per-entity narrative
-material (same rationale the original dashboard_summary/monthly_trends
-exclusion used before this source's schema changed).
+artist x month presence only), so there is no fact to narrate; use
+artist_performance instead (built from Silver, has real metrics — see
+schema.sql). monthly_trends is intentionally excluded too — it's a
+per-country-per-month aggregate used only for the dashboard's cross-country
+trend chart, not per-entity narrative material (same rationale the original
+dashboard_summary/monthly_trends exclusion used before this source's schema
+changed).
 
 Usage:
     python scripts/build_gold_chunks.py
@@ -73,15 +76,36 @@ def aggregate_label_performance(conn):
 def aggregate_kpi_song(conn):
     # Summed across country and month -- kpi_song is country x track x
     # month grain; a yearly per-track chunk is the track's global total for
-    # that year.
+    # that year. LEFT JOINed with track_catalog (built from Silver) to cite
+    # the real track name instead of the bare uri -- track_catalog doesn't
+    # cover every kpi_song uri (different source pipelines), hence LEFT JOIN
+    # and a uri fallback in song_chunk() below.
     df = pd.read_sql(
-        "SELECT year, uri, standardized_label, total_streams, is_hit FROM kpi_song",
+        "SELECT s.year, s.uri, s.standardized_label, s.total_streams, s.is_hit, "
+        "t.track_name FROM kpi_song s LEFT JOIN track_catalog t ON t.uri = s.uri",
         conn,
     )
     agg = df.groupby(['uri', 'year']).agg(
         standardized_label=('standardized_label', 'first'),
         total_streams=('total_streams', 'sum'),
         is_hit=('is_hit', 'max'),   # hit in any country/month that year
+        track_name=('track_name', 'first'),
+    ).reset_index()
+    return agg
+
+
+def aggregate_artist_performance(conn):
+    df = pd.read_sql(
+        "SELECT year, artist_uri, artist_name, total_streams, track_count, "
+        "hit_track_count, best_rank FROM artist_performance",
+        conn,
+    )
+    agg = df.groupby(['artist_uri', 'year']).agg(
+        artist_name=('artist_name', 'first'),
+        total_streams=('total_streams', 'sum'),      # sum: additive volume across countries/months
+        track_count=('track_count', 'sum'),            # sum: distinct-per-country-month, not globally deduped -- an approximation, not an exact global distinct-track count
+        hit_track_count=('hit_track_count', 'sum'),
+        best_rank=('best_rank', 'min'),                 # min: best (lowest) rank achieved anywhere that year
     ).reset_index()
     return agg
 
@@ -114,9 +138,24 @@ def label_chunk(row):
 def song_chunk(row):
     hit_note = "was a hit" if row['is_hit'] else "was not a hit"
     label_note = f" on label {row['standardized_label']}" if row['standardized_label'] else ""
+    # track_catalog doesn't cover every kpi_song uri, so fall back to the
+    # raw uri when no name was found -- same behavior as before this table
+    # existed, just no longer the common case.
+    name = row['track_name'] if pd.notna(row['track_name']) else row['uri']
     return (
-        f"Track {row['uri']}{label_note} had {int(row['total_streams']):,} "
+        f"Track \"{name}\"{label_note} had {int(row['total_streams']):,} "
         f"total streams in {int(row['year'])} and {hit_note} that year."
+    )
+
+
+def artist_chunk(row):
+    return (
+        f"In {int(row['year'])}, artist {row['artist_name']} "
+        f"({row['artist_uri']}) had {int(row['total_streams']):,} total "
+        f"streams across up to {int(row['track_count'])} charting track "
+        f"appearance(s), including {int(row['hit_track_count'])} hit "
+        f"track appearance(s), reaching a best chart rank of "
+        f"{int(row['best_rank'])} that year."
     )
 
 
@@ -124,6 +163,7 @@ TABLES = [
     ('country_performance', aggregate_country_performance, country_chunk, 'country_name'),
     ('label_performance_enhanced', aggregate_label_performance, label_chunk, 'standardized_label'),
     ('kpi_song', aggregate_kpi_song, song_chunk, 'uri'),
+    ('artist_performance', aggregate_artist_performance, artist_chunk, 'artist_uri'),
 ]
 
 

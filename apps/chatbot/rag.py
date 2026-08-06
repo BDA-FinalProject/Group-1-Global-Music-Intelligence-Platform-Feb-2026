@@ -48,6 +48,7 @@ _TABLE_KEYWORDS = {
     'country_performance': ['country', 'countries', 'market', 'nation'],
     'label_performance_enhanced': ['label', 'records', 'recordings'],
     'kpi_song': ['song', 'track', 'songs', 'tracks'],
+    'artist_performance': ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians'],
 }
 
 _country_names = None
@@ -274,22 +275,15 @@ def build_prompt(question, chunks):
 # additive, it never removes the pre-existing behavior.
 #
 # (table, entity_key_column, entity_display_column)
-# kpi_artist is deliberately NOT here — it has no total_streams column (see
-# module-level note in schema.sql), so superlative/trend would SQL-error if
-# routed there. It gets a narrow, count-only path instead — see
-# _COUNT_ONLY_TABLE_KEYWORDS below and its use in detect_sql_intent().
+# artist_performance (built from Silver, see schema.sql) has real metrics,
+# unlike kpi_artist -- so unlike the old kpi_artist-only setup, artist
+# questions now support the full count/superlative/trend range through this
+# generic dict, same as every other entity.
 _SQL_TABLE_KEYWORDS = {
     'country_performance': ('country_name', 'country_name', ['country', 'countries', 'market', 'nation']),
     'label_performance_enhanced': ('standardized_label', 'standardized_label', ['label', 'labels', 'records', 'recordings']),
     'kpi_song': ('uri', 'uri', ['song', 'track', 'songs', 'tracks']),
-}
-
-# Count-only: (table, entity_key_column, keywords). COUNT(DISTINCT key_col)
-# is the one query shape in run_sql_intent() that never touches
-# total_streams, so kpi_artist (no metric columns) can safely support "how
-# many artists" without being exposed to superlative/trend.
-_COUNT_ONLY_TABLE_KEYWORDS = {
-    'kpi_artist': ('artist_uri', ['artist', 'artists']),
+    'artist_performance': ('artist_uri', 'artist_name', ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians']),
 }
 
 _COUNT_KEYWORDS = ['how many', 'total number of', 'number of']
@@ -297,7 +291,7 @@ _TABLE_DISPLAY_NAME = {
     'country_performance': 'countries',
     'label_performance_enhanced': 'labels',
     'kpi_song': 'tracks',
-    'kpi_artist': 'artists',
+    'artist_performance': 'artists',
 }
 _TREND_KEYWORDS = ['grew', 'growth', 'grow']
 _SUPERLATIVE_KEYWORDS = ['highest', 'strongest', 'most', 'least', 'lowest', 'top']
@@ -314,31 +308,12 @@ def _sql_target_table(lowered_question):
     return None, None, None
 
 
-def _count_only_target_table(lowered_question):
-    """Same idea as _sql_target_table(), scoped to _COUNT_ONLY_TABLE_KEYWORDS
-    (tables with no metric columns, so only the count query shape is safe)."""
-    for table, (key_col, keywords) in _COUNT_ONLY_TABLE_KEYWORDS.items():
-        if any(kw in lowered_question for kw in keywords):
-            return table, key_col
-    return None, None
-
-
 def detect_sql_intent(question):
     """Returns a dict describing the SQL path to take, or None to fall
     through to vector retrieval. Keyword-triggered only — false negatives
     (an aggregate question phrased without a trigger word) degrade
     gracefully to the existing vector-retrieval behavior, not a regression."""
     lowered = question.lower()
-
-    # Count-only tables (e.g. kpi_artist) only ever support 'count' — check
-    # this first and return immediately so a "top artist" question (no
-    # total_streams column on kpi_artist) never reaches run_sql_intent()'s
-    # superlative/trend branches.
-    if any(kw in lowered for kw in _COUNT_KEYWORDS):
-        count_only_table, count_only_key_col = _count_only_target_table(lowered)
-        if count_only_table is not None:
-            return {'kind': 'count', 'table': count_only_table, 'key_col': count_only_key_col}
-
     table, key_col, name_col = _sql_target_table(lowered)
     if table is None:
         return None
@@ -469,9 +444,6 @@ def _call_ollama(messages):
     return response.json()['message']['content']
 
 
-_UNSUPPORTED_ENTITY_KEYWORDS = ['artist', 'artists', 'singer', 'singers', 'musician', 'musicians']
-
-
 def get_rag_reply(question):
     # 1. SQL router — MAX/COUNT/AVG/trend questions have a deterministic
     # answer no top-k vector search can provide (see detect_sql_intent()
@@ -488,20 +460,6 @@ def get_rag_reply(question):
         prompt = build_sql_prompt(question, rows, description)
         reply_text = _call_llm(prompt)
         return {'reply': reply_text, 'sources': [description]}
-
-    # 1b. Artist-specific questions that aren't a count (count already
-    # returned above via kpi_artist's COUNT-only path) have no answer in
-    # this Gold source — kpi_artist carries no metric columns, so there is
-    # no artist_performance-equivalent chunk table to retrieve from.
-    # Without this check, these fall through to an unfiltered vector search
-    # across country/label/track chunks and can land on a label whose name
-    # happens to read like an artist's (e.g. "Martin Arteta", "Artiste
-    # First"), producing a confusing or misleading answer instead of an
-    # honest "no data". Checked here, before vector retrieval, so it never
-    # reaches that fallback.
-    lowered_question = question.lower()
-    if any(kw in lowered_question for kw in _UNSUPPORTED_ENTITY_KEYWORDS):
-        return {'reply': NO_DATA_REPLY, 'sources': []}
 
     # 2. Multi-country comparison — a single shared top-k lets whichever
     # country is semantically nearest crowd out the other(s) entirely (see

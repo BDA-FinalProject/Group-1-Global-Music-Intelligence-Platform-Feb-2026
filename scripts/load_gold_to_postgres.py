@@ -45,6 +45,8 @@ TABLES = [
     ("kpi_song", "kpi_song", 2, ["country_name", "uri", "year_month"]),
     ("label_performance_enhanced", "label_performance_enhanced", 1, ["standardized_label", "country_name", "year_month"]),
     ("monthly_trends", "monthly_trends", 1, ["country_name", "year_month"]),
+    ("artist_performance", "artist_performance", 1, ["country_name", "artist_uri", "year_month"]),
+    ("track_catalog", "track_catalog", 0, ["uri"]),
 ]
 
 BATCH_SIZE = 20_000
@@ -52,8 +54,13 @@ BATCH_SIZE = 20_000
 
 def read_table_df(subdir, partition_levels):
     path = GOLD_LOCAL_DIR / subdir
-    dataset = ds.dataset(str(path), format="parquet", partitioning="hive")
+    # partition_levels 0 = unpartitioned (track_catalog): no year=/month=
+    # folders, no year/year_month columns to derive.
+    partitioning = "hive" if partition_levels > 0 else None
+    dataset = ds.dataset(str(path), format="parquet", partitioning=partitioning)
     df = dataset.to_table().to_pandas()
+    if partition_levels == 0:
+        return df
     df["year"] = df["year"].astype(int)
     if partition_levels == 2:
         df["month"] = df["month"].astype(int)

@@ -101,3 +101,34 @@ class MonthlyTrends(models.Model):
     class Meta:
         managed = False
         db_table = 'monthly_trends'
+
+
+class ArtistPerformance(models.Model):
+    """Country x artist x month, with real metrics — unlike kpi_artist, this
+    is built from the Silver layer (scripts/build_artist_gold.py), not the
+    original Gold source. See schema.sql for details."""
+    year = models.IntegerField()
+    month = models.IntegerField()
+    year_month = models.CharField(max_length=16)
+    country_name = models.CharField(max_length=128)
+    artist_uri = models.CharField(max_length=64, primary_key=True)
+    artist_name = models.CharField(max_length=255, null=True)
+    total_streams = models.BigIntegerField(null=True)
+    track_count = models.BigIntegerField(null=True)
+    hit_track_count = models.BigIntegerField(null=True)
+    best_rank = models.IntegerField(null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'artist_performance'
+
+
+class TrackCatalog(models.Model):
+    """uri -> track_name lookup, also built from Silver. No metrics — used
+    only to enrich RAG chunk text with real track names."""
+    uri = models.CharField(max_length=64, primary_key=True)
+    track_name = models.CharField(max_length=255, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'track_catalog'
