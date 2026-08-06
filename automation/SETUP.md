@@ -1,10 +1,10 @@
-# Setup Guide — Spotify Medallion Data Lake on AWS
+# Setup — Spotify Medallion Data Lake on AWS
 
 This guide walks you through standing up the entire pipeline from
-scratch, and then running it day-to-day, **even if you've never used
-Terraform or AWS Glue before.** Every step explains *what* you're doing
-and *why*, not just the command to paste. It's long on purpose — read it
-once fully, then you'll only need the command boxes on future runs.
+scratch, and then running it day-to-day. Every step explains *what*
+you're doing and *why*, not just the command to paste. It's long on
+purpose — read it once fully, then you'll only need the command boxes on
+future runs.
 
 If you get stuck, jump to **§7 Troubleshooting** — it covers every real
 error we've actually hit while building and running this.
