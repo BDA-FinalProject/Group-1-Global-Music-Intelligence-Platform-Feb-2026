@@ -204,24 +204,6 @@ Full details: [`IMPLEMENTATION_LOG.md`](./IMPLEMENTATION_LOG.md) · [`RAG_AUDIT.
 
 ---
 
-## Gold-layer source migration (`group-1-dbda` → `spotify-lake-dev-data`)
-
-The Gold source moved to a different S3 bucket with a materially different schema: no
-`artist_performance`, `label_performance`, or `dashboard_summary` tables, and no artist-level
-metric columns anywhere in the new source. Every layer that assumed the old schema was rewritten:
-`schema.sql`, `scripts/load_gold_to_postgres.py`, `scripts/build_gold_chunks.py`,
-`apps/gold_data/models.py` + `services.py`, `apps/chatbot/rag.py`'s table routing. See the
-architecture diagram and "Where `gold_chunks` comes from" above for the resulting shape.
-`kpi_artist` (country×artist×month presence, no metrics) only supports `COUNT(DISTINCT
-artist_uri)` — it's excluded from the RAG chunk build and from superlative/trend SQL routing,
-which would otherwise error on the missing `total_streams` column. The dashboard's KPI cards and
-"streams over time" chart, which used to read a pre-aggregated global `dashboard_summary`/
-`monthly_trends` table, are now computed as cross-country sums grouped by `(year, month)` — an
-approximation, since summing per-country `active_artists`/`active_songs` double-counts anyone
-active in more than one country that month.
-
----
-
 ## AWS deployment
 
 ```
