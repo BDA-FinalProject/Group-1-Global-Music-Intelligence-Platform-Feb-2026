@@ -66,4 +66,21 @@
     </div>
   </div>
 </section>
+
+<section class="page-section page-section-alt">
+  <div class="container reveal">
+    {% include 'partials/section_header.html' with eyebrow="Inside the Chatbot" title="RAG Pipeline" subtitle="How a question actually gets answered — deterministic where possible, grounded and gated everywhere else." %}
+    <div class="row g-4">
+      {% for step in rag_pipeline %}
+        <div class="col-md-6 col-lg-4">
+          <div class="app-card h-100 pipeline-step-card">
+            <span class="pipeline-step-number">{{ step.step }}</span>
+            <h5 class="app-card-title">{{ step.title }}</h5>
+            <p class="app-card-text">{{ step.text }}</p>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
 {% endblock %}

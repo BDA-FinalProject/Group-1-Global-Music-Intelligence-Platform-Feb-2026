@@ -26,6 +26,7 @@ class ArchitectureView(TemplateView):
         context = super().get_context_data(**kwargs)
         context['flow'] = services.get_architecture_flow()
         context['layers'] = services.get_layer_details()
+        context['rag_pipeline'] = services.get_rag_pipeline_steps()
         return context
 
 
