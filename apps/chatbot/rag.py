@@ -7,10 +7,12 @@ was repeatedly exhausted during testing/normal use — see get_rag_reply()
 for the overall pipeline.
 """
 import os
+import random
 import re
 
 import requests
 from django.db import connections
+from rapidfuzz import fuzz, process
 
 from . import cache
 
@@ -105,6 +107,20 @@ def _get_country_names():
     return _country_names
 
 
+def _name_in_question(name, lowered_question):
+    """Word-boundary match of `name` inside lowered_question — same
+    approach _alias_countries() already used for aliases, now applied to
+    the main exact-name loops too. Plain `in` substring matching let a
+    short entity name embedded inside an unrelated word falsely match
+    (e.g. an artist literally named "Tream" matching inside "streams", or
+    an artist named "Swift" matching inside a typo'd "Taylr Swift" before
+    the fuzzy fallback for "Taylor Swift" ever got a chance to run) —
+    discovered via live regression testing. \\b works correctly for
+    multi-word names too (e.g. "Taylor Swift") since a space is a
+    non-word character."""
+    return re.search(r'\b' + re.escape(name.lower()) + r'\b', lowered_question) is not None
+
+
 def _alias_countries(lowered_question):
     """Real country names implied by an abbreviation/alias in the question
     (e.g. "US" -> "United States"), matched on word boundaries so short
@@ -156,6 +172,60 @@ def _get_artist_catalog():
     return _artist_catalog
 
 
+# Fuzzy matching is a FALLBACK ONLY, tried after exact substring matching
+# finds nothing — preserves today's fast, precise exact-match behavior for
+# the common case, and only spends the extra rapidfuzz pass on questions
+# that would otherwise get zero entity signal at all. score_cutoff=90 is
+# deliberately conservative: this path has no keyword/exact evidence behind
+# it, so a wrong fuzzy match (routing to the wrong entity) is worse than
+# missing one and falling through to generic vector search — today's
+# behavior, so a miss here is never a regression.
+_FUZZY_SCORE_CUTOFF = 90
+
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _question_ngrams(lowered_question, max_words=3):
+    """Word-level 1..max_words n-grams of the question, so fuzzy matching
+    compares whole tokens/phrases against candidate names instead of
+    scanning raw substrings. This exists because the first version of this
+    function used partial_ratio directly against the whole question text,
+    which matched "Tream" (a real, unrelated artist name) inside "streams"
+    at 100% — the exact same word-boundary problem _name_in_question()
+    fixes for exact matches, just re-appearing in the fuzzy fallback since
+    rapidfuzz's partial_ratio has no concept of word boundaries. Comparing
+    only whole n-grams closes that hole."""
+    words = _WORD_RE.findall(lowered_question)
+    grams = set()
+    for n in range(1, max_words + 1):
+        for i in range(len(words) - n + 1):
+            grams.add(' '.join(words[i:i + n]))
+    return grams
+
+
+def _fuzzy_match_one(lowered_question, candidate_names):
+    """Best fuzzy match of any candidate name against a whole-word/phrase
+    n-gram of the question (see _question_ngrams()) — never a raw
+    substring scan. fuzz.ratio (whole-string similarity) is used per
+    n-gram rather than partial_ratio, since n-grams are already the right
+    granularity (complete words/phrases), not arbitrary substrings.
+    processor=str.lower makes the comparison case-insensitive (candidate
+    names are stored in their original case) while the returned match is
+    still the original-case string from candidate_names, unchanged."""
+    if not candidate_names:
+        return None
+    best_score, best_name = 0, None
+    for ngram in _question_ngrams(lowered_question):
+        match = process.extractOne(
+            ngram, candidate_names, scorer=fuzz.ratio,
+            processor=str.lower, score_cutoff=_FUZZY_SCORE_CUTOFF,
+        )
+        if match and match[1] > best_score:
+            best_score, best_name = match[1], match[0]
+    return best_name
+
+
 def classify_query(question):
     """Route the question to a source_table, so a small table (e.g.
     country_performance) isn't drowned out by a much larger one (e.g.
@@ -165,37 +235,65 @@ def classify_query(question):
     Swift") since those are unambiguous signals a generic keyword search
     would miss — e.g. "How did Taylor Swift perform in 2025?" has no
     "artist"/"singer" keyword at all otherwise. Falls back to generic
-    keywords, then to no filter (search all tables).
+    keywords, then a fuzzy name match (typos/slight misspellings), then to
+    no filter (search all tables).
+
+    Returns (source_table, confident) — confident is False only for a
+    fuzzy-fallback match. This matters to the confidence gate in
+    _get_rag_reply_uncached(): an exact name/keyword match is strong enough
+    evidence to skip that gate (see NO_MATCH_DISTANCE_THRESHOLD's docstring
+    for why), but a fuzzy match is not — discovered via live testing, where
+    "What is the weather today?" fuzzy-matched an unrelated real artist
+    named "TOODAY" (ratio("today","tooday") is high) and, because
+    source_table came back non-None, skipped the confidence gate entirely
+    and returned a confidently wrong answer instead of "I don't have data
+    to answer that." A fuzzy match must still pass the distance check.
     """
     lowered = question.lower()
 
     for name in _get_country_names():
-        if name.lower() in lowered:
-            return 'country_performance'
+        if _name_in_question(name, lowered):
+            return 'country_performance', True
     if _alias_countries(lowered):
-        return 'country_performance'
+        return 'country_performance', True
 
     for name, _uri in _get_artist_catalog():
-        if name.lower() in lowered:
-            return 'artist_performance'
+        if _name_in_question(name, lowered):
+            return 'artist_performance', True
 
     for table, keywords in _TABLE_KEYWORDS.items():
         if any(kw in lowered for kw in keywords):
-            return table
-    return None
+            return table, True
+
+    if _fuzzy_match_one(lowered, _get_country_names()):
+        return 'country_performance', False
+    if _fuzzy_match_one(lowered, [name for name, _uri in _get_artist_catalog()]):
+        return 'artist_performance', False
+    return None, False
 
 
 def detect_countries(question):
     """Returns every real country name mentioned in the question (including
     via an alias like "US" -> "United States"), longest full-name match
     first (reuses the same name list/ordering as classify_query()), alias
-    matches appended after. Used only to detect multi-country comparison
+    matches appended after. Exact/alias matches ONLY — deliberately no
+    fuzzy fallback here (unlike classify_query()). This feeds directly into
+    the ungated multi/single-country comparison paths in
+    _get_rag_reply_uncached() (2/2b below), which were only ever designed
+    for high-confidence exact matches and have no confidence-gate distance
+    check; a fuzzy match plugged in here bypasses that check entirely and
+    can produce a confidently wrong answer (discovered live: "What is the
+    weather today?" fuzzy-matched an unrelated real artist named "TOODAY"
+    through this same pattern in detect_artists() and got a wrong answer
+    with no rejection). A typo'd country/artist name still gets routed
+    correctly via classify_query()'s OWN fuzzy fallback in step 3, which
+    DOES have the confidence gate. Used to detect multi-country comparison
     questions ("Compare India and Brazil", "Compare US and India") —
     classify_query() itself still returns a single table."""
     lowered = question.lower()
     found = []
     for name in _get_country_names():
-        if name.lower() in lowered:
+        if _name_in_question(name, lowered):
             found.append(name)
     for name in _alias_countries(lowered):
         if name not in found:
@@ -206,15 +304,17 @@ def detect_countries(question):
 def detect_artists(question):
     """Same idea as detect_countries(), for artist_performance's
     artist_name (see _get_artist_catalog() for why short names are
-    excluded and how name collisions are resolved). Used for multi-artist
-    comparison ("Compare Bad Bunny and Drake") and single-artist
-    exact-chunk routing. Returns (name, artist_uri) pairs — gold_chunks'
-    source_key for artist_performance is keyed on artist_uri, not name, so
-    callers need the uri to actually filter chunks."""
+    excluded and how name collisions are resolved). Exact match ONLY — see
+    detect_countries()'s docstring for why fuzzy matching was removed from
+    here specifically (feeds the ungated comparison paths 2c/2d). Used for
+    multi-artist comparison ("Compare Bad Bunny and Drake") and
+    single-artist exact-chunk routing. Returns (name, artist_uri) pairs —
+    gold_chunks' source_key for artist_performance is keyed on artist_uri,
+    not name, so callers need the uri to actually filter chunks."""
     lowered = question.lower()
     found = []
     for name, uri in _get_artist_catalog():
-        if name.lower() in lowered:
+        if _name_in_question(name, lowered):
             found.append((name, uri))
     return found
 
@@ -251,59 +351,132 @@ def _set_probes(cur):
     cur.execute('SET ivfflat.probes = %s', [IVFFLAT_PROBES])
 
 
-def retrieve_chunks(query_embedding, source_table=None, top_k=5):
-    """Nearest-neighbor search against gold_chunks via pgvector's <-> operator.
-    When source_table is given, restricts the search to that table."""
-    with connections['gold'].cursor() as cur:
-        _set_probes(cur)
-        if source_table:
-            cur.execute(
-                """
-                SELECT source_table, source_key, chunk_text
-                FROM gold_chunks
-                WHERE source_table = %s
-                ORDER BY embedding <-> %s::vector
-                LIMIT %s
-                """,
-                [source_table, query_embedding, top_k],
-            )
-        else:
-            cur.execute(
-                """
-                SELECT source_table, source_key, chunk_text
-                FROM gold_chunks
-                ORDER BY embedding <-> %s::vector
-                LIMIT %s
-                """,
-                [query_embedding, top_k],
-            )
-        return [
-            {'source_table': r[0], 'source_key': r[1], 'chunk_text': r[2]}
-            for r in cur.fetchall()
-        ]
+_reranker = None
 
 
-def retrieve_chunks_for_entity(query_embedding, source_table, entity_name, top_k=5):
-    """Nearest-neighbor search restricted to one named entity's own chunks
-    (source_key LIKE 'EntityName|%'). Used for multi-entity comparison
-    questions so one entity's chunks can't crowd out another's in a single
-    shared top-k (see get_rag_reply())."""
+def _get_reranker():
+    """Lazy singleton, same pattern as _get_model() above. ms-marco-MiniLM-
+    L-6-v2 is a small (~80MB) cross-encoder — fast enough on CPU for the
+    15-20 candidate pairs scored per query here."""
+    global _reranker
+    if _reranker is None:
+        from sentence_transformers import CrossEncoder
+        _reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    return _reranker
+
+
+def rerank_chunks(question, chunks, top_k=5):
+    """Cross-encoder rerank of an already-retrieved candidate set. Unlike
+    embedding similarity (which scores question and chunk independently,
+    then compares vectors), a cross-encoder scores the (question, chunk)
+    PAIR jointly — materially better at judging "is this chunk actually
+    relevant" than distance alone, at the cost of being too slow to run
+    over the full table (hence: rerank a small candidate set, don't
+    replace the initial retrieval)."""
+    if not chunks:
+        return chunks
+    pairs = [(question, c['chunk_text']) for c in chunks]
+    scores = _get_reranker().predict(pairs)
+    ranked = sorted(zip(scores, chunks), key=lambda pair: pair[0], reverse=True)
+    return [chunk for _score, chunk in ranked[:top_k]]
+
+
+_RRF_K = 60  # standard Reciprocal Rank Fusion constant
+
+
+def _rrf_merge(vector_rows, fts_rows):
+    """Combines two independently-ranked candidate lists (vector distance
+    order, full-text ts_rank order) into one deduped list ordered by
+    combined Reciprocal Rank Fusion score — a chunk ranked highly by EITHER
+    signal (not just vector similarity) surfaces near the top of the
+    candidate set that then gets reranked/truncated to top_k. A chunk
+    missing from one list simply doesn't get that list's term added (not
+    zero-filled), so being in just one list still counts for something."""
+    scores = {}
+    rows_by_key = {}
+    for rank, row in enumerate(vector_rows):
+        key = (row['source_table'], row['source_key'])
+        scores[key] = scores.get(key, 0) + 1 / (_RRF_K + rank)
+        rows_by_key[key] = row
+    for rank, row in enumerate(fts_rows):
+        key = (row['source_table'], row['source_key'])
+        scores[key] = scores.get(key, 0) + 1 / (_RRF_K + rank)
+        rows_by_key.setdefault(key, row)
+    ordered_keys = sorted(scores, key=lambda k: scores[k], reverse=True)
+    return [rows_by_key[k] for k in ordered_keys]
+
+
+def _rows_to_chunks(rows):
+    return [{'source_table': r[0], 'source_key': r[1], 'chunk_text': r[2]} for r in rows]
+
+
+def _search_chunks(query_embedding, question, source_table=None, source_key_like=None, top_k=5):
+    """Hybrid retrieval: merges dense vector search (embedding <->, catches
+    semantic similarity) with Postgres full-text search (chunk_tsv @@,
+    catches exact keyword/entity-name hits vector similarity can under-rank
+    — see schema.sql's idx_gold_chunks_tsv) via _rrf_merge(), then
+    cross-encoder reranks the merged candidates down to top_k (see
+    rerank_chunks()). source_table/source_key_like apply identically to
+    both the vector and full-text queries, so entity-scoped callers (see
+    retrieve_chunks_for_entity()) still only ever see that entity's chunks."""
+    candidate_k = max(top_k * 4, 15)
+    where_clauses = []
+    base_params = []
+    if source_table:
+        where_clauses.append('source_table = %s')
+        base_params.append(source_table)
+    if source_key_like:
+        where_clauses.append('source_key LIKE %s')
+        base_params.append(source_key_like)
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ''
+
     with connections['gold'].cursor() as cur:
         _set_probes(cur)
         cur.execute(
-            """
+            f"""
             SELECT source_table, source_key, chunk_text
             FROM gold_chunks
-            WHERE source_table = %s AND source_key LIKE %s
+            {where_sql}
             ORDER BY embedding <-> %s::vector
             LIMIT %s
-            """,
-            [source_table, f"{entity_name}|%", query_embedding, top_k],
+            """,  # noqa: S608 — where_sql built from fixed column names only
+            [*base_params, query_embedding, candidate_k],
         )
-        return [
-            {'source_table': r[0], 'source_key': r[1], 'chunk_text': r[2]}
-            for r in cur.fetchall()
-        ]
+        vector_rows = _rows_to_chunks(cur.fetchall())
+
+        fts_where = where_clauses + ['chunk_tsv @@ websearch_to_tsquery(\'english\', %s)']
+        fts_where_sql = f"WHERE {' AND '.join(fts_where)}"
+        cur.execute(
+            f"""
+            SELECT source_table, source_key, chunk_text
+            FROM gold_chunks
+            {fts_where_sql}
+            ORDER BY ts_rank(chunk_tsv, websearch_to_tsquery('english', %s)) DESC
+            LIMIT %s
+            """,  # noqa: S608 — fts_where_sql built from fixed column names only
+            [*base_params, question, question, candidate_k],
+        )
+        fts_rows = _rows_to_chunks(cur.fetchall())
+
+    merged = _rrf_merge(vector_rows, fts_rows)
+    return rerank_chunks(question, merged, top_k=top_k)
+
+
+def retrieve_chunks(query_embedding, question, source_table=None, top_k=5):
+    """Hybrid vector+full-text search against gold_chunks, reranked. When
+    source_table is given, restricts the search to that table."""
+    return _search_chunks(query_embedding, question, source_table=source_table, top_k=top_k)
+
+
+def retrieve_chunks_for_entity(query_embedding, question, source_table, entity_name, top_k=5):
+    """Same hybrid search as retrieve_chunks(), restricted to one named
+    entity's own chunks (source_key LIKE 'EntityName|%'). Used for multi-
+    entity comparison questions so one entity's chunks can't crowd out
+    another's in a single shared top-k (see get_rag_reply())."""
+    return _search_chunks(
+        query_embedding, question, source_table=source_table,
+        source_key_like=f"{entity_name}|%", top_k=top_k,
+    )
 
 
 def _top1_distance(query_embedding, chunks):
@@ -371,13 +544,69 @@ SYSTEM_PROMPT = (
     "Format your response in markdown: bold key numbers and entity names "
     "with **asterisks**, use a bullet list when presenting 2 or more facts "
     "or a comparison, keep paragraphs to 2-3 lines, and use a markdown "
-    "table when comparing multiple entities across the same metrics."
+    "table when comparing multiple entities across the same metrics. "
+    "Lead with a short natural-language sentence before any bullets/table — "
+    "don't open straight into a list. If a recent conversation is included "
+    "below, answer as a continuation of it: reference earlier facts where "
+    "relevant (e.g. \"compared to X...\") and don't reintroduce yourself or "
+    "repeat framing you already used."
+)
+
+# Small-talk gets its own, much lighter system prompt — the data-analyst
+# rules above (cite sources, tables, "ONLY use context") don't apply to "hi"
+# or "thanks", and forcing them on produces stiff, out-of-place replies.
+_SMALLTALK_SYSTEM_PROMPT = (
+    "You are the friendly assistant for a Spotify streaming analytics "
+    "platform (StreamPulse). Reply warmly and briefly (1-2 sentences, no "
+    "markdown lists/tables) to this greeting/thanks/meta message. If asked "
+    "what you can do, mention you can answer questions about country, "
+    "artist, label, and song streaming performance, trends, and "
+    "comparisons — grounded in real data, not guesses."
 )
 
 
-def build_prompt(question, chunks):
+# Deliberately narrow, same style as _COUNT_KEYWORDS/_TREND_KEYWORDS — must
+# never fire on a real data question. Checked via startswith/short-message
+# heuristics rather than a bare substring match, since e.g. "thanks for the
+# india stats" is a real follow-up, not small talk.
+_GREETING_WORDS = {'hi', 'hello', 'hey', 'yo', 'sup'}
+_THANKS_WORDS = {'thanks', 'thank you', 'thx', 'ty', 'cheers'}
+_META_PHRASES = [
+    'who are you', 'what are you', 'what can you do', 'what do you do',
+    'help me', 'how does this work', 'what can i ask',
+]
+
+
+def detect_smalltalk(question):
+    """True for greetings/thanks/meta questions about the bot itself — see
+    module docstring note above _GREETING_WORDS. Short-message check (<=4
+    words) on greetings/thanks avoids matching a longer real question that
+    happens to start with "hi" or contain "thanks"."""
+    lowered = question.strip().lower().rstrip('!.?')
+    words = lowered.split()
+    if len(words) <= 4:
+        if lowered in _GREETING_WORDS or any(w in _GREETING_WORDS for w in words[:1]):
+            return True
+        if any(lowered.startswith(t) for t in _THANKS_WORDS):
+            return True
+    return any(phrase in lowered for phrase in _META_PHRASES)
+
+
+def _format_history(history):
+    """Last 2 turns as a labelled block for the generation prompt (not just
+    condensation — see get_rag_reply()/plan). Empty string when there's no
+    history, so build_prompt() stays a no-op change for a fresh
+    conversation."""
+    if not history:
+        return ""
+    recent = history[-2:]
+    lines = "\n".join(f"{turn['role']}: {turn['content']}" for turn in recent)
+    return f"Recent conversation:\n{lines}\n\n"
+
+
+def build_prompt(question, chunks, history=None):
     context = "\n".join(f"- {c['chunk_text']}" for c in chunks)
-    return f"Context:\n{context}\n\nQuestion: {question}"
+    return f"{_format_history(history)}Context:\n{context}\n\nQuestion: {question}"
 
 
 # --- SQL router -------------------------------------------------------
@@ -441,16 +670,30 @@ def detect_sql_intent(question):
     lowered = question.lower()
     table, key_col, name_col = _sql_target_table(lowered)
     if table is None:
-        # No entity keyword at all, but a bare "how many streams do we
-        # have" is still answerable — it's an implicit global total, not a
-        # per-entity one. country_performance is the natural "whole
-        # platform" table (every country, every month) to sum from.
-        # Anything else with no table match still correctly falls through
-        # to vector retrieval.
+        # No table KEYWORD at all, but a bare "how many streams do we have"
+        # is still answerable — it's an implicit global total (every
+        # country) UNLESS a specific country/artist is actually named (e.g.
+        # "How many total streams does Brazil have?" — a real condensed
+        # follow-up seen in live testing), in which case the SUM must be
+        # scoped to just that entity via _detect_single_entity_filter() —
+        # see its docstring for the bug this fixes (a global total that
+        # silently ignored the named entity).
         if any(kw in lowered for kw in _COUNT_KEYWORDS) and 'stream' in lowered:
             years = _YEAR_RE.findall(question)
+            for candidate_table, candidate_key in (
+                ('country_performance', 'country_name'),
+                ('artist_performance', 'artist_uri'),
+            ):
+                entity_filter, entity_names = _detect_single_entity_filter(candidate_table, question)
+                if entity_filter:
+                    return {
+                        'kind': 'sum_streams', 'table': candidate_table, 'key_col': candidate_key,
+                        'entity_filter': entity_filter, 'entity_names': entity_names,
+                        'year': int(years[0]) if years else None,
+                    }
             return {
-                'kind': 'sum_streams', 'table': 'country_performance',
+                'kind': 'sum_streams', 'table': 'country_performance', 'key_col': None,
+                'entity_filter': None, 'entity_names': None,
                 'year': int(years[0]) if years else None,
             }
         return None
@@ -466,8 +709,10 @@ def detect_sql_intent(question):
         # entity-plural keyword.
         if 'stream' in lowered:
             years = _YEAR_RE.findall(question)
+            entity_filter, entity_names = _detect_single_entity_filter(table, question)
             return {
-                'kind': 'sum_streams', 'table': table,
+                'kind': 'sum_streams', 'table': table, 'key_col': key_col,
+                'entity_filter': entity_filter, 'entity_names': entity_names,
                 'year': int(years[0]) if years else None,
             }
         # "how many hit songs/tracks [in YEAR]" — a blanket COUNT(DISTINCT
@@ -487,22 +732,79 @@ def detect_sql_intent(question):
         return {'kind': 'count', 'table': table, 'key_col': key_col}
 
     if any(kw in lowered for kw in _TREND_KEYWORDS):
-        years = _YEAR_RE.findall(question)
+        years = [int(y) for y in _YEAR_RE.findall(question)]
         if not years:
             return None  # no explicit year to compute a delta against — don't guess
-        target_year = int(years[0])
+        # "grew ... in 2024" (1 year) implies "vs the year before" — target
+        # is that one year, prev is target-1. "grew ... between 2023 and
+        # 2024" (2 years) explicitly names BOTH endpoints, and always means
+        # growth FROM the earlier year TO the later one regardless of the
+        # order they're mentioned in — max()/min() here, not years[0],
+        # fixes a real bug found via live testing where "between 2023 and
+        # 2024" computed growth(2022->2023) instead (years[0]=2023 was
+        # wrongly treated as target, giving prev=2022).
+        if len(years) >= 2:
+            target_year, prev_year = max(years[:2]), min(years[:2])
+        else:
+            target_year, prev_year = years[0], years[0] - 1
         return {
             'kind': 'trend', 'table': table, 'key_col': key_col, 'name_col': name_col,
-            'target_year': target_year, 'prev_year': target_year - 1,
+            'target_year': target_year, 'prev_year': prev_year,
             'ascending': any(kw in lowered for kw in _ASCENDING_KEYWORDS),
+            'entity_filter': _detect_entity_filter(table, question),
         }
 
     if any(kw in lowered for kw in _SUPERLATIVE_KEYWORDS):
         return {
             'kind': 'superlative', 'table': table, 'key_col': key_col, 'name_col': name_col,
             'ascending': any(kw in lowered for kw in _ASCENDING_KEYWORDS),
+            'entity_filter': _detect_entity_filter(table, question),
         }
 
+    return None
+
+
+def _detect_single_entity_filter(table, question):
+    """Like _detect_entity_filter() but for a SINGLE named entity (>=1, not
+    >=2 — a comparison needs two entities, a plain "how much does Brazil
+    have" needs only one). Used by sum_streams so a question like "How many
+    total streams does Brazil have?" computes an entity-scoped SUM instead
+    of a global one — discovered via live testing where a real condensed
+    follow-up ("What about Brazil?" → "How many total streams does Brazil
+    have?") silently summed every country's streams together, ignoring
+    "Brazil" entirely, because the old sum_streams path had no entity
+    awareness at all. Returns (key_values_for_sql, display_names_for_reply)
+    — for country_performance these are identical (country_name IS the
+    readable name); for artist_performance the SQL side needs artist_uri
+    but the reply needs the real artist_name, hence two separate lists.
+    Returns (None, None) when no entity of the right type is named."""
+    if table == 'country_performance':
+        names = detect_countries(question)
+        return (names, names) if names else (None, None)
+    if table == 'artist_performance':
+        pairs = detect_artists(question)
+        if pairs:
+            return [uri for _name, uri in pairs], [name for name, _uri in pairs]
+        return None, None
+    return None, None
+
+
+def _detect_entity_filter(table, question):
+    """2+ named entities in a trend/superlative question (e.g. "which grew
+    faster, India or Brazil") means the answer should be computed ONLY over
+    those entities, not a global top-N — otherwise a comparison question
+    silently gets an unrelated global ranking back (the entities the user
+    named never even appear in the reply). Returns the key_col values to
+    filter on (country_name for country_performance, artist_uri for
+    artist_performance — same values key_col already stores), or None when
+    fewer than 2 named entities are found, preserving today's global-top-N
+    behavior exactly for questions that don't name specific entities."""
+    if table == 'country_performance':
+        names = detect_countries(question)
+        return names if len(names) >= 2 else None
+    if table == 'artist_performance':
+        pairs = detect_artists(question)
+        return [uri for _name, uri in pairs] if len(pairs) >= 2 else None
     return None
 
 
@@ -553,41 +855,69 @@ def run_sql_intent(intent, limit=5):
             return [(table, count)], desc
 
         if intent['kind'] == 'sum_streams':
+            entity_filter = intent.get('entity_filter')
+            clauses, params = [], []
             if intent['year'] is not None:
-                cur.execute(
-                    f"SELECT SUM(total_streams) FROM {table} WHERE year = %s",  # noqa: S608 — table from fixed dict, not user input
-                    [intent['year']],
-                )
-                desc = f"sql:{table}:SUM(total_streams) WHERE year={intent['year']}"
-            else:
-                cur.execute(f"SELECT SUM(total_streams) FROM {table}")  # noqa: S608 — table from fixed dict, not user input
-                desc = f"sql:{table}:SUM(total_streams)"
+                clauses.append(f"{table}.year = %s")
+                params.append(intent['year'])
+            if entity_filter:
+                clauses.append(f"{table}.{intent['key_col']} = ANY(%s)")
+                params.append(entity_filter)
+            where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            cur.execute(
+                f"SELECT SUM(total_streams) FROM {table} {where_sql}",  # noqa: S608 — table/key_col from fixed dict, not user input
+                params,
+            )
             total = cur.fetchone()[0] or 0
+            desc_parts = []
+            if entity_filter:
+                desc_parts.append(f"{intent['key_col']} IN {tuple(entity_filter)}")
+            if intent['year'] is not None:
+                desc_parts.append(f"year={intent['year']}")
+            desc = f"sql:{table}:SUM(total_streams)" + (f" WHERE {' AND '.join(desc_parts)}" if desc_parts else "")
             return [(table, total)], desc
 
         if intent['kind'] == 'superlative':
             name_col = intent['name_col']
             select_name = name_expr.format(table=table, name_col=name_col)
             direction = 'ASC' if intent['ascending'] else 'DESC'
+            entity_filter = intent.get('entity_filter')
+            # Named entities (e.g. "which of India and Brazil has the
+            # highest streams") restrict the ranking to just those entities
+            # instead of a global top-N — otherwise the named entities might
+            # not even appear in the result (see _detect_entity_filter()).
+            entity_clause = f"WHERE {table}.{key_col} = ANY(%s)" if entity_filter else ""
+            params = [entity_filter] if entity_filter else []
+            row_limit = len(entity_filter) if entity_filter else limit
+            params.append(row_limit)
             cur.execute(
                 f"SELECT {select_name}, SUM({table}.total_streams) AS total "  # noqa: S608
-                f"FROM {table} {join_clause} GROUP BY {table}.{key_col}, {select_name} "
+                f"FROM {table} {join_clause} {entity_clause} GROUP BY {table}.{key_col}, {select_name} "
                 f"ORDER BY total {direction} LIMIT %s",
-                [limit],
+                params,
             )
             rows = cur.fetchall()
-            return rows, f"sql:{table}:SUM(total_streams) {direction}"
+            filter_note = f" WHERE {key_col} IN {tuple(entity_filter)}" if entity_filter else ""
+            return rows, f"sql:{table}:SUM(total_streams) {direction}{filter_note}"
 
         if intent['kind'] == 'trend':
             name_col = intent['name_col']
             select_name = name_expr.format(table=table, name_col=name_col)
             direction = 'ASC' if intent['ascending'] else 'DESC'
+            entity_filter = intent.get('entity_filter')
+            entity_clause = f"AND {table}.{key_col} = ANY(%s)" if entity_filter else ""
+            params = [intent['target_year'], intent['prev_year']]
+            if entity_filter:
+                params.append(entity_filter)
+            params.extend([intent['prev_year'], intent['target_year']])
+            row_limit = len(entity_filter) if entity_filter else limit
+            params.append(row_limit)
             cur.execute(
                 f"""
                 WITH yearly AS (
                     SELECT {table}.{key_col} AS k, {select_name} AS name, {table}.year AS year, SUM({table}.total_streams) AS total
                     FROM {table} {join_clause}
-                    WHERE {table}.year IN (%s, %s)
+                    WHERE {table}.year IN (%s, %s) {entity_clause}
                     GROUP BY {table}.{key_col}, {select_name}, {table}.year
                 )
                 SELECT a.name, (a.total - COALESCE(b.total, 0)) AS growth
@@ -597,17 +927,18 @@ def run_sql_intent(intent, limit=5):
                 ORDER BY growth {direction}
                 LIMIT %s
                 """,  # noqa: S608 — key_col/name_col/table from fixed dict, not user input
-                [intent['target_year'], intent['prev_year'], intent['prev_year'], intent['target_year'], limit],
+                params,
             )
             rows = cur.fetchall()
-            return rows, f"sql:{table}:growth({intent['prev_year']}->{intent['target_year']}) {direction}"
+            filter_note = f" WHERE {key_col} IN {tuple(entity_filter)}" if entity_filter else ""
+            return rows, f"sql:{table}:growth({intent['prev_year']}->{intent['target_year']}) {direction}{filter_note}"
 
     raise ValueError(f"unhandled SQL intent kind: {intent['kind']}")
 
 
-def build_sql_prompt(question, rows, description):
+def build_sql_prompt(question, rows, description, history=None):
     lines = "\n".join(f"- {label}: {value:,}" if isinstance(value, int) else f"- {label}: {value}" for label, value in rows)
-    return f"Context (computed directly from the database, {description}):\n{lines}\n\nQuestion: {question}"
+    return f"{_format_history(history)}Context (computed directly from the database, {description}):\n{lines}\n\nQuestion: {question}"
 
 
 class ProviderBudgetExceeded(Exception):
@@ -735,6 +1066,156 @@ def _call_ollama(messages):
     return response.json()['message']['content']
 
 
+# Condensation is only triggered when the question itself signals it's a
+# follow-up — a pronoun/reference word, or an elliptical "what about X"
+# pattern. Discovered via live testing: with condensation running
+# unconditionally whenever history existed, a fully self-contained new
+# question ("Which country grew the fastest between 2023 and 2024?") got
+# rewritten to wrongly include unrelated entities from 2 turns earlier
+# ("...for Bad Bunny and The Weekend"), corrupting an otherwise-correct SQL
+# router match into a wrong, artist-scoped answer. The condense system
+# prompt already asks the LLM to "return it unchanged" when a question is
+# already self-contained, but that's advisory — an LLM can still be
+# over-helpful and inject context that wasn't asked for. This check is a
+# deterministic gate in front of it, same "keyword-triggered, fails safe by
+# doing less" philosophy as detect_smalltalk()/detect_sql_intent() elsewhere
+# in this file: no signal words → skip the LLM call entirely, use the
+# question exactly as typed.
+_FOLLOWUP_SIGNAL_WORDS = {
+    'it', 'its', "it's", 'that', 'this', 'those', 'these', 'they', 'them',
+    'their', 'he', 'she', 'him', 'her', 'his',
+}
+_FOLLOWUP_SIGNAL_PHRASES = [
+    'what about', 'and what', 'how about', 'same for', 'compared to that',
+    'compared to it', 'compared to them',
+]
+# A bare comparison ("which grew faster?", "who has more streams?") names
+# no entity of its own but still depends entirely on prior conversation —
+# see _try_comparison_followup_rewrite()'s docstring. Also checked by
+# _needs_condensation() below (not just that function) — without this, a
+# question like "which grew faster?" matched none of the pronoun/phrase
+# signals above, needs_condensation() returned False, and the ENTIRE
+# rewrite pipeline (both deterministic helpers and the LLM condenser) was
+# skipped outright — a real bug caught in live testing where the raw,
+# unresolved question fell straight into fuzzy/vector matching instead.
+_COMPARISON_SIGNAL_WORDS = {'which', 'who', 'faster', 'better', 'higher', 'more', 'most', 'grew', 'growth'}
+
+
+def _needs_condensation(question):
+    """True only when `question` contains a pronoun/reference word, an
+    elliptical follow-up pattern, or a bare comparison word — see
+    _FOLLOWUP_SIGNAL_WORDS/_PHRASES/_COMPARISON_SIGNAL_WORDS above for why
+    each exists. A question with none of these signals is already
+    self-contained by construction (nothing in it refers back to
+    anything), so condensation is skipped entirely rather than trusting an
+    LLM call to correctly no-op."""
+    lowered = question.lower()
+    if any(phrase in lowered for phrase in _FOLLOWUP_SIGNAL_PHRASES):
+        return True
+    words = set(re.findall(r"[a-z']+", lowered))
+    return bool(words & _FOLLOWUP_SIGNAL_WORDS) or bool(words & _COMPARISON_SIGNAL_WORDS)
+
+
+# Handles the extremely common "What about X?" / "and X?" follow-up shape
+# WITHOUT any LLM call — see _try_simple_followup_rewrite()'s docstring for
+# why this exists (the LLM condenser is not reliably faithful to the named
+# entity).
+_SIMPLE_FOLLOWUP_RE = re.compile(r'^(?:what about|and what about|how about|and)\s+(.+?)\s*\??$', re.IGNORECASE)
+
+
+def _try_simple_followup_rewrite(question, history):
+    """Deterministic rewrite for the "What about X?" / "and X?" pattern —
+    bypasses _condense_question()'s LLM call entirely for this one common
+    case. Exists because that LLM call is NOT reliably faithful to the
+    named entity: live testing caught a real run where "What about
+    Brazil?" got rewritten to "What is the total number of streams on
+    Spotify in a particular country?" — "Brazil" was silently DROPPED and
+    replaced with a vague placeholder, so no amount of downstream entity
+    detection could ever recover it (the name was simply gone from the
+    text). This pattern is simple enough to handle with zero risk of that:
+    extract X, confirm it's a real country/artist name, and directly
+    construct the standalone question by substitution — the entity name is
+    copied verbatim, never regenerated, so it can't be dropped or altered.
+    A year mentioned in the most recent user turn is carried forward too
+    (so "...in 2024? / What about Brazil?" stays scoped to 2024, not
+    silently becoming an all-time question). Returns None (meaning: fall
+    back to the LLM condenser) when the pattern doesn't match or the
+    fragment isn't a recognizable real entity name — e.g. "what about the
+    weather" correctly falls through, since detect_countries/detect_artists
+    won't find anything there."""
+    match = _SIMPLE_FOLLOWUP_RE.match(question.strip())
+    if not match:
+        return None
+    fragment = match.group(1)
+    countries = detect_countries(fragment)
+    artists = detect_artists(fragment)
+    if not countries and not artists:
+        return None
+    entity_name = countries[0] if countries else artists[0][0]
+    prior_user_turns = [t['content'] for t in reversed(history) if t.get('role') == 'user']
+    year_match = _YEAR_RE.search(prior_user_turns[0]) if prior_user_turns else None
+    year_note = f" in {year_match.group(1)}" if year_match else ""
+    return f"How did {entity_name} perform{year_note}?"
+
+
+def _recent_entities(history, limit=2):
+    """Most recently mentioned real country/artist names across the
+    conversation, most recent turn first, deduped. Used by
+    _try_comparison_followup_rewrite() to figure out which entities a bare
+    "which grew faster?" is asking about."""
+    found = []
+    for turn in reversed(history):
+        content = turn.get('content', '')
+        for name in detect_countries(content):
+            if name not in found:
+                found.append(name)
+        for name, _uri in detect_artists(content):
+            if name not in found:
+                found.append(name)
+        if len(found) >= limit:
+            break
+    return found[:limit]
+
+
+def _try_comparison_followup_rewrite(question, history):
+    """Deterministic rewrite for a bare comparison follow-up like "which
+    grew faster?" / "who has more streams?" — the question names NO entity
+    of its own, so it depends entirely on the last 2 distinct entities
+    already discussed earlier in the conversation. Same motivation as
+    _try_simple_followup_rewrite(): the LLM condenser is not reliably
+    faithful here either — live testing caught it turning "which grew
+    faster?" (after an India/Brazil discussion) into a rewrite that somehow
+    fuzzy-matched an unrelated real artist literally named "Faster",
+    comparing two nonsense entities instead of India and Brazil. Naming
+    both real entities explicitly, verbatim, removes any need for the LLM
+    to guess who "which" refers to. Returns None (fall back to the LLM
+    condenser) unless the question has a comparison signal word, names no
+    entity of its own, AND at least 2 recent entities were actually found
+    in history — a comparison question with nothing to compare falls
+    through unchanged rather than fabricating entities.
+
+    Deliberately checks detect_countries() only, NOT detect_artists() —
+    this data's artist catalog turns out to contain real artists literally
+    named "faster"/"Faster", so detect_artists("which grew faster?") itself
+    returns a match, which would make this guard wrongly conclude the bare
+    comparison "already names its own entity" and bail out before ever
+    reconstructing the real India/Brazil comparison. Country names colliding
+    with a common comparison word this way is far less likely, so this
+    trades a small amount of theoretical coverage (a genuine artist-name
+    comparison phrased with zero other signal) for not being sabotaged by
+    this specific real collision."""
+    lowered = question.lower()
+    words = set(re.findall(r"[a-z']+", lowered))
+    if not (words & _COMPARISON_SIGNAL_WORDS):
+        return None
+    if detect_countries(question):
+        return None  # already names its own country — not a bare comparison
+    entities = _recent_entities(history, limit=2)
+    if len(entities) < 2:
+        return None
+    return f"{entities[0]} vs {entities[1]}: {question.strip()}"
+
+
 # Deliberately a different, narrow system prompt from SYSTEM_PROMPT (the
 # markdown-formatted-answer one) — this call has exactly one job: rewrite,
 # not answer. Reusing SYSTEM_PROMPT here would have the model try to
@@ -797,13 +1278,32 @@ def get_rag_reply(question, history=None):
 
 
 def _get_rag_reply_uncached(question, history=None):
-    # 0. Follow-up resolution — if there's conversation history, rewrite
-    # the question into a standalone one before any routing runs (see
-    # _condense_question()). Skipped entirely for a fresh conversation
-    # (history empty/None), so a first message costs exactly the one LLM
-    # call it always has.
-    if history:
-        question = _condense_question(question, history)
+    # 0. Follow-up resolution — if there's conversation history AND the
+    # question actually looks like a follow-up (see _needs_condensation()),
+    # rewrite it into a standalone one before any routing runs. Tries the
+    # deterministic _try_simple_followup_rewrite() first (handles "What
+    # about X?" with zero risk of dropping the entity — see its docstring);
+    # only falls back to the LLM-based _condense_question() for shapes that
+    # simple pattern doesn't cover (pronouns, "that country", etc.).
+    # Skipped entirely for a fresh conversation (history empty/None) and
+    # for an already-complete question, so a first message — and any
+    # standalone question later in the conversation — costs exactly zero
+    # extra LLM calls.
+    if history and _needs_condensation(question):
+        question = (
+            _try_simple_followup_rewrite(question, history)
+            or _try_comparison_followup_rewrite(question, history)
+            or _condense_question(question, history)
+        )
+
+    # 0b. Small talk — greetings/thanks/meta questions get a short warm
+    # reply with no retrieval/SQL at all. Checked right after condensation
+    # (so "thanks!" after a data answer still condenses fine, though it
+    # rarely needs to) and before the SQL router so it can never be
+    # shadowed by a table keyword.
+    if detect_smalltalk(question):
+        reply_text = _call_llm(question, system_prompt=_SMALLTALK_SYSTEM_PROMPT)
+        return {'reply': reply_text, 'sources': []}
 
     # 1. SQL router — MAX/COUNT/AVG/trend questions have a deterministic
     # answer no top-k vector search can provide (see detect_sql_intent()
@@ -816,16 +1316,33 @@ def _get_rag_reply_uncached(question, history=None):
             count = rows[0][1]
             table = rows[0][0]
             label = _TABLE_DISPLAY_NAME.get(table, table)
-            return {'reply': f"There are **{count}** distinct {label} in the data.", 'sources': [description]}
+            reply_text = random.choice([
+                f"There are **{count}** distinct {label} in the data.",
+                f"I count **{count}** distinct {label} in the dataset.",
+                f"Looking at the data, there are **{count}** {label} total.",
+            ])
+            return {'reply': reply_text, 'sources': [description]}
         if sql_intent['kind'] == 'sum_streams':
             total = rows[0][1]
             year_note = f" in {sql_intent['year']}" if sql_intent['year'] else ""
-            return {'reply': f"Total streams{year_note}: **{total:,}**.", 'sources': [description]}
+            entity_names = sql_intent.get('entity_names')
+            entity_note = f" for {', '.join(entity_names)}" if entity_names else ""
+            reply_text = random.choice([
+                f"Total streams{entity_note}{year_note}: **{total:,}**.",
+                f"That comes to **{total:,}** total streams{entity_note}{year_note}.",
+                f"Streams{entity_note}{year_note} add up to **{total:,}**.",
+            ])
+            return {'reply': reply_text, 'sources': [description]}
         if sql_intent['kind'] == 'count_hits':
             count = rows[0][1]
             year_note = f" in {sql_intent['year']}" if sql_intent['year'] else ""
-            return {'reply': f"There are **{count}** hit tracks{year_note} in the data.", 'sources': [description]}
-        prompt = build_sql_prompt(question, rows, description)
+            reply_text = random.choice([
+                f"There are **{count}** hit tracks{year_note} in the data.",
+                f"I found **{count}** hit tracks{year_note}.",
+                f"**{count}** tracks are marked as hits{year_note}.",
+            ])
+            return {'reply': reply_text, 'sources': [description]}
+        prompt = build_sql_prompt(question, rows, description, history=history)
         reply_text = _call_llm(prompt)
         return {'reply': reply_text, 'sources': [description]}
 
@@ -839,8 +1356,8 @@ def _get_rag_reply_uncached(question, history=None):
         embedding = embed_query(question)
         chunks = []
         for name in countries:
-            chunks.extend(retrieve_chunks_for_entity(embedding, 'country_performance', name, top_k=5))
-        prompt = build_prompt(question, chunks)
+            chunks.extend(retrieve_chunks_for_entity(embedding, question, 'country_performance', name, top_k=5))
+        prompt = build_prompt(question, chunks, history=history)
         reply_text = _call_llm(prompt)
         sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
         return {'reply': reply_text, 'sources': sources}
@@ -852,8 +1369,8 @@ def _get_rag_reply_uncached(question, history=None):
     # below) can miss it entirely and surface an unrelated country instead.
     if len(countries) == 1:
         embedding = embed_query(question)
-        chunks = retrieve_chunks_for_entity(embedding, 'country_performance', countries[0], top_k=5)
-        prompt = build_prompt(question, chunks)
+        chunks = retrieve_chunks_for_entity(embedding, question, 'country_performance', countries[0], top_k=5)
+        prompt = build_prompt(question, chunks, history=history)
         reply_text = _call_llm(prompt)
         sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
         return {'reply': reply_text, 'sources': sources}
@@ -866,8 +1383,8 @@ def _get_rag_reply_uncached(question, history=None):
         embedding = embed_query(question)
         chunks = []
         for name, uri in artists:
-            chunks.extend(retrieve_chunks_for_entity(embedding, 'artist_performance', uri, top_k=5))
-        prompt = build_prompt(question, chunks)
+            chunks.extend(retrieve_chunks_for_entity(embedding, question, 'artist_performance', uri, top_k=5))
+        prompt = build_prompt(question, chunks, history=history)
         reply_text = _call_llm(prompt)
         sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
         return {'reply': reply_text, 'sources': sources}
@@ -880,29 +1397,33 @@ def _get_rag_reply_uncached(question, history=None):
     if len(artists) == 1:
         name, uri = artists[0]
         embedding = embed_query(question)
-        chunks = retrieve_chunks_for_entity(embedding, 'artist_performance', uri, top_k=5)
-        prompt = build_prompt(question, chunks)
+        chunks = retrieve_chunks_for_entity(embedding, question, 'artist_performance', uri, top_k=5)
+        prompt = build_prompt(question, chunks, history=history)
         reply_text = _call_llm(prompt)
         sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]
         return {'reply': reply_text, 'sources': sources}
 
     # 3. Normal single-entity/unclassified path.
     embedding = embed_query(question)
-    source_table = classify_query(question)
-    chunks = retrieve_chunks(embedding, source_table=source_table)
+    source_table, confident_match = classify_query(question)
+    chunks = retrieve_chunks(embedding, question, source_table=source_table)
 
-    # Confidence gate — only when classify_query() found no entity/keyword
-    # match at all (source_table is None) and even the closest result is
-    # farther than any confirmed-correct match observed for this project.
-    # See NO_MATCH_DISTANCE_THRESHOLD above for why this isn't applied when
-    # source_table is set (routed matches, including informally-phrased
-    # ones, can legitimately exceed this distance and still be correct).
-    if source_table is None:
+    # Confidence gate — skipped only for a CONFIDENT match (exact
+    # entity-name or keyword match; see classify_query()'s confident flag,
+    # NO_MATCH_DISTANCE_THRESHOLD's docstring for why routed/informally-
+    # phrased matches can legitimately exceed this distance and still be
+    # correct). Applied whenever source_table is None OR the match came
+    # from the fuzzy fallback (confident_match is False) — a fuzzy match is
+    # weak evidence on its own and must still clear the distance check, or
+    # a coincidental fuzzy hit (e.g. "today" fuzzy-matching an unrelated
+    # artist literally named "TOODAY") can return a confidently wrong
+    # answer instead of NO_DATA_REPLY.
+    if source_table is None or not confident_match:
         top1_distance = _top1_distance(embedding, chunks)
         if top1_distance is None or top1_distance > NO_MATCH_DISTANCE_THRESHOLD:
             return {'reply': NO_DATA_REPLY, 'sources': []}
 
-    prompt = build_prompt(question, chunks)
+    prompt = build_prompt(question, chunks, history=history)
     reply_text = _call_llm(prompt)
 
     sources = [f"{c['source_table']}:{c['source_key']}" for c in chunks]

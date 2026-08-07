@@ -154,6 +154,14 @@ CREATE TABLE gold_chunks (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_gold_chunks_source ON gold_chunks (source_table, source_key);
+-- Full-text search side of hybrid retrieval (apps/chatbot/rag.py's
+-- _search_chunks()) — combined with the vector <-> search via Reciprocal
+-- Rank Fusion so an exact keyword hit (e.g. a country/artist name) isn't
+-- solely at the mercy of embedding similarity. GENERATED ALWAYS AS ...
+-- STORED backfills existing rows automatically on ALTER TABLE.
+ALTER TABLE gold_chunks ADD COLUMN chunk_tsv tsvector
+  GENERATED ALWAYS AS (to_tsvector('english', chunk_text)) STORED;
+CREATE INDEX idx_gold_chunks_tsv ON gold_chunks USING GIN (chunk_tsv);
 -- ANN index. Opclass is vector_l2_ops, not vector_cosine_ops, because
 -- apps/chatbot/rag.py's retrieve_chunks() queries with the `<->` (L2
 -- distance) operator, and an ivfflat index is only used by the planner
