@@ -15,15 +15,17 @@ CDAC Big Data Engineering group project.
 │  (Parquet)    │     │                    │     │                              │
 └──────────────┘     │  ├─ country_performance│  │  ┌─────────┐  ┌───────────┐ │
        ▲              │  ├─ kpi_artist         │  │  │Dashboard │  │  Chatbot   │ │
-       │              │  ├─ kpi_song           │  │  └─────────┘  └───────────┘ │
-┌──────┴──────┐       │  ├─ label_performance_ │  └──────────┬──────────────────┘
-│   AWS S3     │       │  │   enhanced          │             │
-│  Silver layer│       │  ├─ monthly_trends     │             │
-│ (song_charts)│       │  ├─ artist_performance │             │
-└─────────────┘       │  ├─ track_catalog      │             │
-                       │  └─ gold_chunks (RAG)  │             ▼
-                       └────────────────────────┘      Groq LLM API
-                                                       (llama-3.3-70b)
+       │              │  ├─ kpi_song           │  │  └─────────┘  └─────┬─────┘ │
+┌──────┴──────┐       │  ├─ label_performance_ │  └────────────────────┼───────┘
+│   AWS S3     │       │  │   enhanced          │                       │
+│  Silver layer│       │  ├─ monthly_trends     │             ┌─────────┴─────────┐
+│ (song_charts)│       │  ├─ artist_performance │             │  Redis (response     │
+└─────────────┘       │  ├─ track_catalog      │             │  cache + per-provider │
+                       │  └─ gold_chunks (RAG)  │             │  rate-limit tracking) │
+                       └────────────────────────┘             └─────────┬─────────┘
+                                                                          ▼
+                                                        Gemini → Groq → local Ollama
+                                                        (automatic fallback chain)
 ```
 
 Source: `s3://spotify-lake-dev-data/gold/` — country/song/label/monthly-trend tables, all
@@ -64,43 +66,93 @@ More detail: [`RAG_ARCHITECTURE.md`](./RAG_ARCHITECTURE.md) · [`GOLD_LAYER_REPO
                                     │
                                     ▼
                     ┌───────────────────────────────┐
-                    │  keyword match?                 │
-                    │  "highest/most/how many/grew"   │
+                    │  Redis: cached reply for this    │
+                    │  (question, history) hash?        │
                     └───────┬─────────────────┬───────┘
                         yes │                 │ no
                             ▼                 ▼
-                ┌───────────────────┐   ┌─────────────────────────┐
-                │   SQL router        │   │  2+ known countries       │
-                │   (parameterized     │   │  named in question?       │
-                │   query on Gold      │   └──────┬─────────────┬────┘
-                │   tables)            │      yes  │             │ no
-                └─────────┬───────────┘            ▼             ▼
-                          │              ┌──────────────────┐ ┌─────────────────┐
-                          │              │ per-country        │ │ embed_query()     │
-                          │              │ scoped retrieval    │ │ classify_query()  │
-                          │              │ (one query each,    │ │ retrieve_chunks() │
-                          │              │  merged)             │ └────────┬─────────┘
-                          │              └─────────┬────────┘          │
-                          │                        │           ┌───────┴────────┐
-                          │                        │           │ no table match  │
-                          │                        │           │ + distance too   │
-                          │                        │           │ far?             │
-                          │                        │           └───┬─────────┬───┘
-                          │                        │            yes│         │no
-                          │                        │               ▼         │
-                          │                        │        "I don't have    │
-                          │                        │         data for that"  │
-                          │                        │        (no LLM call)    │
-                          │                        │                        │
-                          └────────────┬───────────┴────────────────────────┘
-                                       ▼
-                              build_prompt(context)
-                                       │
-                                       ▼
-                              Groq / Ollama LLM
-                                       │
-                                       ▼
-                                    Answer
+                    Cached answer   ┌───────────────────────────────┐
+                    (no LLM call)   │  History present AND question    │
+                                    │  looks like a follow-up?          │
+                                    │  ("what about X?", "which grew    │
+                                    │   faster?", pronouns, ...)        │
+                                    └───────┬─────────────────┬───────┘
+                                        yes │                 │ no
+                                            ▼                 │
+                              Rewrite into a standalone        │
+                              question — deterministic          │
+                              substitution first (never drops   │
+                              the entity name), falls back to   │
+                              an LLM call only if that doesn't   │
+                              apply                              │
+                                            │                    │
+                                            └─────────┬──────────┘
+                                                      ▼
+                                    ┌───────────────────────────────┐
+                                    │  Small talk? ("hi", "thanks",    │
+                                    │  "what can you do")               │
+                                    └───────┬─────────────────┬───────┘
+                                        yes │                 │ no
+                                            ▼                 ▼
+                                    Warm reply      ┌───────────────────────────────┐
+                                    (no retrieval)   │  SQL router — count /            │
+                                                      │  sum_streams / count_hits /       │
+                                                      │  trend / superlative keyword?     │
+                                                      │  (named country/artist scopes      │
+                                                      │   the SQL filter when present;     │
+                                                      │   no filter = global result)       │
+                                                      └───────┬─────────────────┬───────┘
+                                                          yes │                 │ no
+                                                              ▼                 ▼
+                                          Deterministic SQL result   ┌───────────────────────────────┐
+                                          → reply (count/sum/hits     │  Named entity match — real       │
+                                          skip the LLM entirely;       │  country or artist name(s) in     │
+                                          trend/superlative still      │  the question? (exact match,      │
+                                          phrase the answer via LLM)   │  fuzzy typo-tolerant fallback)     │
+                                                                        └───────┬─────────────────┬───────┘
+                                                                            yes │                 │ no
+                                                                                ▼                 ▼
+                                                                  Entity-scoped retrieval   classify_query() —
+                                                                  (one query per named       keyword/fuzzy table
+                                                                  entity, merged for          guess, or no filter
+                                                                  comparisons)                        │
+                                                                                │                      │
+                                                                                └──────────┬───────────┘
+                                                                                           ▼
+                                                                          ┌───────────────────────────────┐
+                                                                          │  Hybrid retrieval: vector          │
+                                                                          │  search (pgvector) + full-text     │
+                                                                          │  search, merged via Reciprocal      │
+                                                                          │  Rank Fusion → cross-encoder        │
+                                                                          │  rerank → top 5 chunks               │
+                                                                          └──────────────────┬───────────────┘
+                                                                                             ▼
+                                                                          ┌───────────────────────────────┐
+                                                                          │  Confidence gate — only when        │
+                                                                          │  the match wasn't a confident        │
+                                                                          │  exact one (no entity/keyword         │
+                                                                          │  match, or a fuzzy one): is the       │
+                                                                          │  closest chunk still too far?         │
+                                                                          └───────┬─────────────────┬───────┘
+                                                                              yes │                 │ no
+                                                                                  ▼                 │
+                                                                        "I don't have data           │
+                                                                         to answer that"              │
+                                                                        (no LLM call)                  │
+                                                                                                        │
+                    ┌───────────────────────────────────────────────────────────────────────────────┴───┐
+                    ▼
+        build_prompt(retrieved context + recent conversation history)
+                    │
+                    ▼
+        Gemini → Groq → local Ollama (automatic fallback; each provider's
+        usage is budget-checked against Redis before it's called)
+                    │
+                    ▼
+                 Answer
+                    │
+                    ▼
+        Cache the reply in Redis, keyed on (question, history)
 ```
 
 ### Where `gold_chunks` comes from
@@ -220,8 +272,14 @@ this source's schema changed.
 | — | Wired up Groq as the LLM, Ollama still works as fallback |
 | Vague trend questions ("global streaming trend...") coincidentally matched a label chunk (e.g. a label literally named "Trending Now") | `NO_MATCH_DISTANCE_THRESHOLD` re-measured and tightened 1.10 → 0.95 against the current `gold_chunks`; some coincidental matches (e.g. a query containing "years" matching a label called "17 Earth Years", distance ~0.87) remain a known, documented gap — indistinguishable from a real match by distance alone |
 | Gold source had no artist-level metrics at all — "who is the top artist by streams" landed on unrelated label chunks and gave misleading answers (temporarily hard-blocked to an honest refusal instead) | Built real `artist_performance`/`track_catalog` tables from the **Silver** layer (which has the artist↔streams link Gold never had — see "Gold-layer tables"), removed the hard block, wired the new table into the SQL router and chunk builder like any other entity |
+| A comparison question ("which country grew fastest, India or Brazil?") silently returned a global top-N answer, ignoring the named entities entirely | Trend/superlative/`sum_streams` SQL intents now check for named countries/artists and add an `= ANY(...)` filter when present; unfiltered behavior is unchanged when no entity is named |
+| "Between 2023 and 2024" computed growth for the wrong year pair (treated the first-mentioned year as the target, not necessarily the later one) | Trend intent now uses `max()`/`min()` of the two mentioned years instead of assuming order |
+| A fuzzy (non-exact) entity match could still bypass the confidence gate, so a typo/coincidental match (e.g. "today" fuzzy-matching an unrelated artist literally named "TOODAY") produced a confidently wrong answer instead of an honest refusal | `classify_query()` now reports whether a match was exact or fuzzy; the confidence gate applies whenever it's not a confident exact match |
+| An exact-substring entity check let a short artist name match inside an unrelated word (e.g. an artist named "Tream" matching inside "streams") | Switched entity-name matching to word-boundary regex everywhere, same approach already used for country aliases |
+| The LLM-based follow-up condenser occasionally dropped or corrupted the named entity ("What about Brazil?" was rewritten into a vague "a particular country", or a bare "which grew faster?" hallucinated an unrelated real artist as the answer) | Added two deterministic (non-LLM) rewrite paths for the common "What about X?" and bare-comparison shapes — the entity name is copied verbatim from the question/history, never regenerated — falling back to the LLM condenser only for shapes those don't cover |
+| Retrieval was vector-similarity only — an exact keyword/name hit could be outranked by a semantically-similar-but-wrong chunk | Added full-text search (Postgres `tsvector`/GIN) alongside vector search, merged via Reciprocal Rank Fusion, then a cross-encoder reranking pass over the merged candidates |
 
-Tested on the same 15 questions before/after every change. **7/15 flipped from wrong to correct, 0 regressions.**
+Tested on the same 15 questions before/after every change. **7/15 flipped from wrong to correct, 0 regressions.** (Later fixes above were verified against their own live multi-turn regression scenarios rather than re-running that original 15-question set.)
 
 Full details: [`IMPLEMENTATION_LOG.md`](./IMPLEMENTATION_LOG.md) · [`RAG_AUDIT.md`](./RAG_AUDIT.md) · [`RAG_ENGINEERING_AUDIT.md`](./RAG_ENGINEERING_AUDIT.md)
 
@@ -234,7 +292,8 @@ Full details: [`IMPLEMENTATION_LOG.md`](./IMPLEMENTATION_LOG.md) · [`RAG_AUDIT.
 │                                                                                             │
 │   Internet ──▶ Nginx :80 ──▶ Gunicorn :8000 ──▶ Django ──▶ Postgres 17 + pgvector :5432   │
 │                                                       │                                     │
-│                                                       └──▶ Groq API (external)              │
+│                                                       ├──▶ Redis (local, cache + rate-limit) │
+│                                                       └──▶ Gemini / Groq / Ollama (LLM)      │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
