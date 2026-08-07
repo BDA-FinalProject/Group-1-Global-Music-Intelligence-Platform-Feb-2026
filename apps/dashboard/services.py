@@ -71,23 +71,12 @@ def get_chart_data(chart_key):
 
 
 def get_filter_options():
-    """Dropdown options for the dashboard's filter bar."""
+    """Dropdown options for the dashboard's filter bar — offline fallback
+    shape only, kept in sync with apps.gold_data.services.get_filter_options()'s
+    real years/countries shape (see apps/dashboard/serializers.py's
+    FilterOptionsSerializer) even though this module returns placeholder
+    values, not real years/country names, since it's never routed today."""
     return {
-        'date_ranges': [
-            {'value': '7d', 'label': 'Last 7 days'},
-            {'value': '30d', 'label': 'Last 30 days'},
-            {'value': '90d', 'label': 'Last 90 days'},
-        ],
-        'layers': [
-            {'value': 'all', 'label': 'All Layers'},
-            {'value': 'bronze', 'label': 'Bronze'},
-            {'value': 'silver', 'label': 'Silver'},
-            {'value': 'gold', 'label': 'Gold'},
-        ],
-        'sources': [
-            {'value': 'all', 'label': 'All Sources'},
-            {'value': 'transactions', 'label': 'Transactions'},
-            {'value': 'clickstream', 'label': 'Clickstream'},
-            {'value': 'iot', 'label': 'IoT Sensors'},
-        ],
+        'years': [{'value': '', 'label': 'All Years'}],
+        'countries': [{'value': '', 'label': 'All Countries'}],
     }

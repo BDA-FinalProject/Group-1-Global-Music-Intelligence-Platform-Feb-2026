@@ -1,16 +1,14 @@
 """
 Views for the dashboard app.
 
-KPI cards now come from apps.gold_data.services (real Gold-layer Postgres
-data). Filter options remain from apps.dashboard.services — the filter bar
-is still a non-functional stub (see static/dashboard/js/dashboard.js), not
-in scope for this pass.
+KPI cards and filter options now come from apps.gold_data.services (real
+Gold-layer Postgres data) — the filter bar (Year/Country) is fully wired,
+both for the initial server-rendered paint here and for client-side
+re-fetches on filter change (see static/dashboard/js/dashboard.js).
 """
 from django.views.generic import TemplateView
 
 from apps.gold_data import services as gold_services
-
-from . import services
 
 
 class DashboardView(TemplateView):
@@ -22,5 +20,5 @@ class DashboardView(TemplateView):
         # are fetched client-side from the API (see
         # static/dashboard/js/dashboard.js) since Chart.js needs JS anyway.
         context['kpis'] = gold_services.get_kpis()
-        context['filters'] = services.get_filter_options()
+        context['filters'] = gold_services.get_filter_options()
         return context

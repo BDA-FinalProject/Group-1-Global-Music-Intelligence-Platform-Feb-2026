@@ -65,5 +65,9 @@
   border-bottom: 1px solid var(--color-border);
 }
 .chart-card canvas {
+  /* min-height reserves the chart's space before Chart.js renders into it
+     (a bare <canvas> defaults to ~150px tall) — keeps the async fetch/
+     render in dashboard.js from growing the layout after initial paint. */
+  min-height: 280px;
   max-height: 280px;
 }

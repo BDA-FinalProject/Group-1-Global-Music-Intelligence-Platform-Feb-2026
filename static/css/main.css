@@ -48,6 +48,17 @@
 
 html {
   scroll-behavior: smooth;
+  /* Disables the browser's automatic scroll-anchoring. Without this, when
+     content above the viewport changes size after initial paint (e.g. a
+     Chart.js canvas growing from its default intrinsic height once data
+     loads and it renders — see apps/dashboard/static/dashboard/css/
+     dashboard.css's .chart-card canvas), the browser silently scrolls the
+     page to compensate, landing on a blank gap between sections. Reported
+     live as "the page looks blank after applying filters" and "the
+     Project page looks blank" — both are this same auto-scroll, not
+     missing/broken content (the DOM is always there; the viewport was
+     just scrolled past it). */
+  overflow-anchor: none;
 }
 @media (prefers-reduced-motion: reduce) {
   html {

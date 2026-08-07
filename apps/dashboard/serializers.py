@@ -20,7 +20,11 @@ class KPISerializer(serializers.Serializer):
 
 class ChartDatasetSerializer(serializers.Serializer):
     label = serializers.CharField()
-    data = serializers.ListField(child=serializers.FloatField())
+    # allow_null: the hit-rate-trend chart can have a gap (a period with
+    # zero active_songs, so the ratio is undefined) — Chart.js handles a
+    # null data point fine (a break in the line), it just needs to survive
+    # serialization instead of erroring on a non-float value.
+    data = serializers.ListField(child=serializers.FloatField(allow_null=True))
 
 
 class ChartDataSerializer(serializers.Serializer):
@@ -35,6 +39,5 @@ class FilterOptionSerializer(serializers.Serializer):
 
 
 class FilterOptionsSerializer(serializers.Serializer):
-    date_ranges = FilterOptionSerializer(many=True)
-    layers = FilterOptionSerializer(many=True)
-    sources = FilterOptionSerializer(many=True)
+    years = FilterOptionSerializer(many=True)
+    countries = FilterOptionSerializer(many=True)
