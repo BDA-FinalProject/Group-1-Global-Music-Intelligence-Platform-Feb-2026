@@ -10,7 +10,7 @@
 {% block content %}
 <section class="page-section page-hero pb-0">
   <div class="container reveal">
-    {% include 'partials/section_header.html' with eyebrow="Ask the Pipeline" title="RAG Chatbot" subtitle="Ask questions about the data pipeline. Running in demo mode with placeholder replies until the RAG backend is connected." align="text-start" %}
+    {% include 'partials/section_header.html' with eyebrow="Ask the Pipeline" title="RAG Chatbot" subtitle="Ask about country, artist, label, or song streaming performance — grounded in real Gold-layer data, 2017–2026." align="text-start" %}
   </div>
 </section>
 
@@ -21,17 +21,31 @@
         <div class="chat-header-avatar"><i class="bi bi-robot"></i></div>
         <div>
           <h6 class="mb-0">Pipeline Assistant</h6>
-          <span class="chat-status"><span class="chat-status-dot"></span>Demo mode</span>
+          <span class="chat-status"><span class="chat-status-dot"></span>Live</span>
         </div>
       </div>
 
       <div class="chat-messages" id="chatMessages">
         <div class="chat-message chat-message-bot">
           <div class="chat-bubble">
-            Hi! I'm the pipeline assistant. Ask me anything about the data pipeline — I'm currently
-            answering with placeholder replies until the RAG backend is connected.
+            Hi! I can answer questions about country, artist, label, and song streaming performance
+            — totals, trends, comparisons, and more — grounded in real data. Try one of the
+            questions below, or ask your own.
           </div>
         </div>
+      </div>
+
+      <!-- Fixed, always-visible suggestion chips — unlike the greeting message
+           above (which scrolls out of view once the conversation grows), this
+           stays put right above the input so "what can I ask?" is always
+           answered at a glance. Clicking a chip fills and sends it. -->
+      <div class="chat-suggestions" id="chatSuggestions">
+        <span class="chat-suggestions-label">Try asking:</span>
+        <button type="button" class="chat-suggestion-chip">How did India perform in 2024?</button>
+        <button type="button" class="chat-suggestion-chip">Compare Brazil and Mexico</button>
+        <button type="button" class="chat-suggestion-chip">Which country grew the fastest in 2024?</button>
+        <button type="button" class="chat-suggestion-chip">Tell me about Taylor Swift</button>
+        <button type="button" class="chat-suggestion-chip">How many hit tracks were there in 2024?</button>
       </div>
 
       <form class="chat-input-bar" id="chatForm">

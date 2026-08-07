@@ -1,11 +1,10 @@
 /**
  * RAG Chatbot frontend.
  *
- * sendMessage() posts to the single stub chat endpoint
- * (POST /api/v1/chatbot/messages/), which currently returns a canned
- * reply from apps/chatbot/services.py::get_bot_reply(). Swapping in a
- * real RAG/LLM backend only requires changing that function — this file
- * and the request/response contract stay the same.
+ * sendMessage() posts to the live chat endpoint (POST
+ * /api/v1/chatbot/messages/), backed by the real RAG pipeline in
+ * apps/chatbot/rag.py (falls back to a canned reply only if that pipeline
+ * itself errors — see apps/chatbot/services.py::get_bot_reply()).
  *
  * Conversation memory: conversationHistory tracks this tab's exchanges
  * only (no server-side session/DB — see apps.chatbot.rag.
@@ -94,7 +93,7 @@
   }
 
   async function sendMessage(message) {
-    // STUB: single integration point for the real RAG/LLM backend — see
+    // Single integration point for the RAG/LLM backend — see
     // apps/chatbot/api.py::ChatMessageView and
     // apps/chatbot/services.py::get_bot_reply().
     const response = await fetch(CHAT_ENDPOINT, {
@@ -115,11 +114,7 @@
     return { reply: data.reply, sources: data.sources };
   }
 
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const message = input.value.trim();
-    if (!message) return;
-
+  async function submitMessage(message) {
     appendMessage(message, 'user');
     input.value = '';
     input.focus();
@@ -139,5 +134,24 @@
       appendMessage('Sorry, something went wrong. Please try again.', 'bot');
       console.error(error);
     }
+  }
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+    submitMessage(message);
   });
+
+  // Fixed suggestion chips (see chatbot.html/.css) — clicking one sends it
+  // immediately rather than just filling the input, since the whole point
+  // is a one-click example, not an extra step.
+  const suggestions = document.getElementById('chatSuggestions');
+  if (suggestions) {
+    suggestions.addEventListener('click', (event) => {
+      const chip = event.target.closest('.chat-suggestion-chip');
+      if (!chip || chip.disabled) return;
+      submitMessage(chip.textContent.trim());
+    });
+  }
 })();
