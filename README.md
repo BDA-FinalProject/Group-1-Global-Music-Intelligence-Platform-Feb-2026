@@ -55,7 +55,7 @@ scripts/build_gold_chunks.py       Gold tables ──▶ yearly chunks ──▶
 | Backend | Django 6 + DRF |
 | Hosting | AWS EC2 `m5.large`, Nginx + Gunicorn |
 
-More detail: [`RAG_ARCHITECTURE.md`](./RAG_ARCHITECTURE.md) · [`GOLD_LAYER_REPORT.md`](./GOLD_LAYER_REPORT.md) · [`GOLD_LAYER_LIVE_REPORT.md`](./GOLD_LAYER_LIVE_REPORT.md)
+More detail: [`docs/RAG_ARCHITECTURE.md`](./docs/RAG_ARCHITECTURE.md) · [`docs/GOLD_LAYER_REPORT.md`](./docs/GOLD_LAYER_REPORT.md) · [`docs/GOLD_LAYER_LIVE_REPORT.md`](./docs/GOLD_LAYER_LIVE_REPORT.md)
 
 ---
 
@@ -281,7 +281,7 @@ this source's schema changed.
 
 Tested on the same 15 questions before/after every change. **7/15 flipped from wrong to correct, 0 regressions.** (Later fixes above were verified against their own live multi-turn regression scenarios rather than re-running that original 15-question set.)
 
-Full details: [`IMPLEMENTATION_LOG.md`](./IMPLEMENTATION_LOG.md) · [`RAG_AUDIT.md`](./RAG_AUDIT.md) · [`RAG_ENGINEERING_AUDIT.md`](./RAG_ENGINEERING_AUDIT.md)
+Full details: [`docs/IMPLEMENTATION_LOG.md`](./docs/IMPLEMENTATION_LOG.md) · [`docs/RAG_AUDIT.md`](./docs/RAG_AUDIT.md) · [`docs/RAG_ENGINEERING_AUDIT.md`](./docs/RAG_ENGINEERING_AUDIT.md)
 
 ---
 
