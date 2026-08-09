@@ -21,4 +21,4 @@ pyspark>=3.3.0,<3.4.0
 # CI & Code Quality Tools
 # (Used in CI pipeline for code verification and linting)
 # -----------------------------------------------------------------------------
-ruff>=0.5.0
+# ruff>=0.5.0
