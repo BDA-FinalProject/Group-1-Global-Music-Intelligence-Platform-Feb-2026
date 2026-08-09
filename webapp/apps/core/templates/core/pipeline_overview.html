@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+
+{% block title %}Pipeline Overview{% endblock %}
+
+{% block content %}
+{% url 'core:architecture' as architecture_url %}
+
+<section class="page-section page-hero">
+  <div class="container">
+    {% include 'partials/section_header.html' with eyebrow="How It Works" title="Pipeline Overview" subtitle="A step-by-step look at how data moves from source systems to the dashboard and chatbot." %}
+  </div>
+</section>
+
+<section class="page-section page-section-alt">
+  <div class="container">
+    <div class="row g-4">
+      {% for step in steps %}
+        <div class="col-md-6 col-lg-4">
+          <div class="app-card h-100 pipeline-step-card">
+            <span class="pipeline-step-number">{{ step.step }}</span>
+            <h5 class="app-card-title">{{ step.title }}</h5>
+            <p class="app-card-text">{{ step.text }}</p>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="page-section text-center">
+  <div class="container">
+    <p class="section-subtitle mx-auto mb-4">Want the full picture of how these stages connect?</p>
+    {% include 'partials/button.html' with href=architecture_url label="View Architecture" icon="bi-arrow-right" %}
+  </div>
+</section>
+{% endblock %}

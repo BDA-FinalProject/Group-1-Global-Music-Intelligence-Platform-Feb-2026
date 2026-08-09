@@ -1,0 +1,72 @@
+name: CI Validate Pipeline
+
+on:
+  push:
+    branches:
+      - feature/glue-cicd-terraform
+      - dev
+  pull_request:
+    branches:
+      - feature/glue-cicd-terraform
+      - dev
+
+jobs:
+  validate:
+    name: Validate Python and Terraform
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout Repository
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. Install Python dependencies (if requirements.txt is not empty)
+      - name: Install Python Dependencies
+        run: |
+          if [ -s requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt is empty. Skipping pip install."
+          fi
+
+      # 4. Verify ETL syntax
+      - name: Verify ETL syntax
+        run: python -m compileall etl/
+
+      # 5. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.5.7'
+
+      # 6. Terraform Format Check
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        working-directory: terraform
+
+      # 7. Terraform Init
+      - name: Terraform Init
+        run: terraform init -backend=false
+        working-directory: terraform
+
+      # 8. Terraform Validate
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: terraform
+
+      # 9. Run Ruff (if configured)
+      - name: Run Ruff (if configured)
+        run: |
+          if [ -f "pyproject.toml" ] || [ -f "ruff.toml" ] || grep -q "ruff" requirements.txt 2>/dev/null; then
+            echo "Ruff is configured. Running ruff check..."
+            pip install ruff
+            ruff check etl/
+          else
+            echo "Ruff is not configured. Skipping."
+          fi

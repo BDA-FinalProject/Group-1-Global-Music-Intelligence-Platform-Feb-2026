@@ -1,0 +1,19 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+terraform.tfvars
+*.tfvars.json
+
+# Ignore local tfvars if they contain secrets
+# terraform.tfvars
+
+# Keep lock file
+!.terraform.lock.hcl
+
+# Ruff cache
+.ruff_cache/
+
+__pycache__/
+*.pyc

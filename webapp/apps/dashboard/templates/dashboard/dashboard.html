@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'dashboard/css/dashboard.css' %}">
+{% endblock %}
+
+{% block content %}
+<section class="page-section page-hero">
+  <div class="container reveal">
+    {% include 'partials/section_header.html' with eyebrow="Live Metrics" title="Dashboard" subtitle="KPIs and charts are served live from the Gold layer (S3 → Postgres)." align="text-start" %}
+  </div>
+</section>
+
+<section class="page-section pt-0">
+  <div class="container reveal">
+    <form class="dashboard-filters row g-3 align-items-end mb-4" id="dashboardFilters">
+      <div class="col-sm-5 col-md-4">
+        <label class="form-label" for="filterYear">Year</label>
+        <select class="form-select" id="filterYear" name="year">
+          {% for opt in filters.years %}
+            <option value="{{ opt.value }}">{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-5 col-md-4">
+        <label class="form-label" for="filterCountry">Country</label>
+        <select class="form-select" id="filterCountry" name="country">
+          {% for opt in filters.countries %}
+            <option value="{{ opt.value }}">{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-2 col-md-4">
+        <button type="submit" class="btn btn-primary w-100">Apply Filters</button>
+      </div>
+    </form>
+
+    <div class="row g-4 mb-5" id="kpiGrid">
+      {% for kpi in kpis %}
+        <div class="col-sm-6 col-lg-3">
+          {% include 'dashboard/partials/kpi_card.html' with kpi=kpi %}
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="row g-4 mb-4">
+      <div class="col-lg-6">
+        <div class="app-card chart-card">
+          <h5 class="app-card-title mb-3">Total Streams Over Time</h5>
+          <canvas id="chart-streams-over-time" data-chart-key="streams-over-time"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="app-card chart-card">
+          <h5 class="app-card-title mb-1">Top Countries by Streams</h5>
+          <p class="app-card-text small text-muted mb-3">Always shows the global top 8, regardless of the Country filter above.</p>
+          <canvas id="chart-top-countries" data-chart-key="top-countries"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="app-card chart-card">
+          <h5 class="app-card-title mb-3">Top Artists by Streams</h5>
+          <canvas id="chart-top-artists" data-chart-key="top-artists"></canvas>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="app-card chart-card">
+          <h5 class="app-card-title mb-3">Hit Rate Trend</h5>
+          <canvas id="chart-hit-rate-trend" data-chart-key="hit-rate-trend"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="{% static 'dashboard/js/dashboard.js' %}"></script>
+{% endblock %}
