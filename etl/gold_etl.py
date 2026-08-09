@@ -28,36 +28,30 @@ Outputs
 # =============================================================================
 
 import logging
-
-from pyspark.sql import SparkSession
-
 from itertools import chain
-from pyspark.sql import Window
 
+from pyspark.sql import SparkSession, Window
 from pyspark.sql.functions import (
-
     arrays_zip,
     asc,
     avg,
+    coalesce,
     col,
     countDistinct,
+    create_map,
     desc,
     explode,
+    first,
     lag,
+    lit,
     max,
-    row_number,
     round,
+    row_number,
     split,
     sum,
     trim,
     when,
-    coalesce,
-    create_map,
-    first,
-    lit 
-
 )
-
 
 # =============================================================================
 # Logger
@@ -1310,9 +1304,9 @@ if __name__ == "__main__":
     try:
         main()
 
-    except Exception as e:
+    except Exception:
         logger.exception("Spotify Gold ETL Failed.")
-        raise e
+        raise
 
     finally:
         spark.stop()

@@ -32,7 +32,7 @@ from pyspark.sql.functions import (
     round,
     trim,
     when,
-    year
+    year,
 )
 
 # =============================================================================
@@ -391,9 +391,9 @@ if __name__ == "__main__":
     try:
         main()
 
-    except Exception as e:
+    except Exception:
         logger.exception("Spotify Silver ETL Failed.")
-        raise e
+        raise
 
     finally:
         spark.stop()
