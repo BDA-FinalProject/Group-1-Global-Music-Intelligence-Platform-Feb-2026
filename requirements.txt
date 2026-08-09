@@ -1,0 +1,24 @@
+# =============================================================================
+# Spotify Big Data Project - Python Dependencies
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Ingestion Dependencies
+# (Used by the ingestion pipeline to fetch data from Kaggle and upload to S3)
+# -----------------------------------------------------------------------------
+boto3>=1.20.0
+kaggle==1.6.17       # Pinned to 1.6.17 due to OOM issue in v1.7.4.5+ with large files
+
+# -----------------------------------------------------------------------------
+# Local Development & Testing Dependencies
+# (Provided at runtime in the AWS Glue 4.0 environment. Included here for
+# local IDE autocomplete, syntax checks, and testing purposes)
+# -----------------------------------------------------------------------------
+# PySpark matches the AWS Glue 4.0 runtime (Spark 3.3.0, Python 3.10)
+pyspark>=3.3.0,<3.4.0
+
+# -----------------------------------------------------------------------------
+# CI & Code Quality Tools
+# (Used in CI pipeline for code verification and linting)
+# -----------------------------------------------------------------------------
+ruff>=0.5.0
