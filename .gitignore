@@ -11,3 +11,6 @@ terraform.tfvars
 
 # Keep lock file
 !.terraform.lock.hcl
+
+__pycache__/
+*.pyc
